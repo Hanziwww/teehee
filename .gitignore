@@ -1,0 +1,31 @@
+# Rust
+/target/
+**/*.rs.bk
+*.pdb
+Cargo.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Test images
+*.png
+*.jpg
+*.jpeg
+*.bmp
+!examples/*.png
+
+# Output files
+stego_*
+extracted_*
+output_*
+
+# Logs
+*.log
+
+# OS
+Thumbs.db

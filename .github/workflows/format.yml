@@ -1,0 +1,25 @@
+name: Rust Format Check
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+
+jobs:
+  format:
+    name: 检查代码格式
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: 检出代码
+      uses: actions/checkout@v4
+      
+    - name: 安装 Rust 工具链
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: rustfmt
+        
+    - name: 检查格式
+      run: cargo fmt --all -- --check
+

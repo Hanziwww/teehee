@@ -43,13 +43,13 @@
 //! - `steganography`: Main steganography engine
 
 pub mod fractal;
-pub mod steganography;
 pub mod stc;
+pub mod steganography;
 
 // Re-export main types for convenience
 pub use fractal::{AffineTransform, FractalBlock, FractalCoder};
+pub use stc::{stc_decode, stc_encode_min_cost, StcParams};
 pub use steganography::TeeheeStego;
-pub use stc::{StcParams, stc_encode_min_cost, stc_decode};
 
 /// Library version
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -60,7 +60,7 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 ///
 /// ```no_run
 /// use teehee::TeeheeStego;
-/// 
+///
 /// // Single-factor: build-time secret only
 /// let stego1 = TeeheeStego::new();
 ///
@@ -126,4 +126,4 @@ mod integration_tests {
         let capacity = calculate_capacity(&img);
         assert!(capacity > 20); // Depends on texture selection
     }
-} 
+}

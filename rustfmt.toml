@@ -1,0 +1,24 @@
+# Rustfmt 配置文件
+# 这个配置与 GitHub Actions 工作流兼容
+# 仅使用稳定版本支持的选项
+
+# 基本设置
+edition = "2021"
+max_width = 100
+hard_tabs = false
+tab_spaces = 4
+
+# 格式化选项
+newline_style = "Auto"
+use_small_heuristics = "Default"
+force_explicit_abi = true
+reorder_imports = true
+reorder_modules = true
+remove_nested_parens = true
+
+# 数组和链式调用
+array_width = 60
+chain_width = 60
+
+# 结构体
+struct_lit_width = 18

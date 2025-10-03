@@ -267,6 +267,7 @@ pub fn stc_decode(stego_bits: &[u8], params: &StcParams) -> Vec<u8> {
 }
 
 /// Compute syndrome from cover bits and flips
+#[allow(dead_code)]
 fn compute_syndrome(cover_bits: &[u8], flips: &[u8], params: &StcParams) -> Vec<u8> {
     let stego_bits: Vec<u8> = cover_bits
         .iter()

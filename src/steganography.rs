@@ -549,7 +549,7 @@ fn check_debugger() {
     {
         use std::fs;
         if let Ok(status) = fs::read_to_string("/proc/self/status") {
-            if status.contains("TracerPid:\t0") == false {
+            if !status.contains("TracerPid:\t0") {
                 // Process is being traced
                 std::process::abort();
             }

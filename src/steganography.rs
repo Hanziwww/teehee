@@ -62,11 +62,12 @@ impl TeeheeStego {
 
         let (width, height) = carrier.dimensions();
 
-        // Derive build-secret based keying material
-        let build_secret = get_build_secret();
+        // Security: Use SecretGuard to auto-zero secret after use
+        let secret_guard = SecretGuard::new();
+        let build_secret = secret_guard.as_ref();
 
         // Encrypt message with AES-256-GCM using key derived from build secret
-        let (ciphertext, nonce) = encrypt_message(&build_secret, message)?;
+        let (ciphertext, nonce) = encrypt_message(build_secret, message)?;
 
         // Header will be created after position calculation
 
@@ -160,7 +161,9 @@ impl TeeheeStego {
     pub fn extract(&self, stego: &DynamicImage) -> Result<Vec<u8>> {
         let (width, height) = stego.dimensions();
 
-        let build_secret = get_build_secret();
+        // Security: Use SecretGuard to auto-zero secret after use
+        let secret_guard = SecretGuard::new();
+        let build_secret = secret_guard.as_ref();
 
         // Rebuild positions - MUST match embed() exactly using deterministic algorithm
         let gray = stego.to_luma8();
@@ -319,13 +322,126 @@ fn generate_embed_positions(
     positions
 }
 
+/// Securely reconstruct the build secret from scattered, obfuscated fragments
+/// Security features:
+/// 1. Fragments are scattered across multiple env vars (harder to locate)
+/// 2. XOR obfuscation (must reverse to get original)
+/// 3. Integrity verification (detects tampering)
+/// 4. Immediate zeroing after use (minimize exposure window)
 fn get_build_secret() -> [u8; 32] {
-    let b64 = env!("TEEHEE_BUILD_SALT_B64");
-    let bytes = base64::engine::general_purpose::STANDARD.decode(b64).expect("Invalid build salt");
-    assert_eq!(bytes.len(), 32);
-    let mut out = [0u8; 32];
-    out.copy_from_slice(&bytes);
-    out
+    // XOR deobfuscation keys (must match build.rs)
+    const XOR_KEYS: [u8; 8] = [0x5A, 0x3C, 0x7E, 0x91, 0x42, 0x8D, 0x6F, 0x1B];
+    
+    // Decode scattered fragments
+    let frag0 = base64::engine::general_purpose::STANDARD
+        .decode(env!("TEEHEE_SALT_A"))
+        .expect("Invalid fragment A");
+    let frag1 = base64::engine::general_purpose::STANDARD
+        .decode(env!("TEEHEE_SALT_B"))
+        .expect("Invalid fragment B");
+    let frag2 = base64::engine::general_purpose::STANDARD
+        .decode(env!("TEEHEE_SALT_C"))
+        .expect("Invalid fragment C");
+    let frag3 = base64::engine::general_purpose::STANDARD
+        .decode(env!("TEEHEE_SALT_D"))
+        .expect("Invalid fragment D");
+    let expected_checksum = base64::engine::general_purpose::STANDARD
+        .decode(env!("TEEHEE_INTEGRITY"))
+        .expect("Invalid integrity checksum");
+    
+    // Validate sizes
+    assert_eq!(frag0.len(), 8, "Fragment A corrupted");
+    assert_eq!(frag1.len(), 8, "Fragment B corrupted");
+    assert_eq!(frag2.len(), 8, "Fragment C corrupted");
+    assert_eq!(frag3.len(), 8, "Fragment D corrupted");
+    assert_eq!(expected_checksum.len(), 8, "Checksum corrupted");
+    
+    // Reconstruct obfuscated secret
+    let mut secret = [0u8; 32];
+    secret[0..8].copy_from_slice(&frag0);
+    secret[8..16].copy_from_slice(&frag1);
+    secret[16..24].copy_from_slice(&frag2);
+    secret[24..32].copy_from_slice(&frag3);
+    
+    // Deobfuscate with XOR
+    for (i, byte) in secret.iter_mut().enumerate() {
+        *byte ^= XOR_KEYS[i % XOR_KEYS.len()];
+    }
+    
+    // Verify integrity (first 8 bytes of SHA-256)
+    let mut hasher = Sha256::new();
+    hasher.update(&secret);
+    let computed_checksum = hasher.finalize();
+    let computed_short = &computed_checksum[0..8];
+    
+    if computed_short != expected_checksum.as_slice() {
+        // Security: zero memory before panicking
+        secret.fill(0);
+        panic!("Build secret integrity check failed - binary may be tampered");
+    }
+    
+    // Note: Caller should zero this after use
+    secret
+}
+
+/// Basic anti-debugging check
+/// Note: This is defense-in-depth, not foolproof
+#[cfg(target_os = "windows")]
+fn check_debugger() {
+    use std::ptr;
+    extern "system" {
+        fn IsDebuggerPresent() -> i32;
+    }
+    unsafe {
+        if IsDebuggerPresent() != 0 {
+            // Don't give clear error - just corrupt the secret
+            std::process::abort();
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn check_debugger() {
+    // On Unix-like systems, check PTRACE
+    #[cfg(target_family = "unix")]
+    {
+        use std::fs;
+        if let Ok(status) = fs::read_to_string("/proc/self/status") {
+            if status.contains("TracerPid:\t0") == false {
+                // Process is being traced
+                std::process::abort();
+            }
+        }
+    }
+}
+
+/// Wrapper to ensure secret is zeroed after use
+struct SecretGuard([u8; 32]);
+
+impl SecretGuard {
+    fn new() -> Self {
+        // Anti-debugging check before revealing secret
+        check_debugger();
+        
+        SecretGuard(get_build_secret())
+    }
+    
+    fn as_ref(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl Drop for SecretGuard {
+    fn drop(&mut self) {
+        // Zero the secret when dropped (defense against memory dumps)
+        self.0.fill(0);
+        
+        // Extra: overwrite with random data then zero again
+        use rand::RngCore;
+        let mut rng = rand::rngs::OsRng;
+        rng.fill_bytes(&mut self.0);
+        self.0.fill(0);
+    }
 }
 
 /// Modern HKDF-based key derivation for AEAD encryption

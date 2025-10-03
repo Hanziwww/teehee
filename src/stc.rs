@@ -30,7 +30,6 @@ impl Default for StcParams {
 }
 
 impl StcParams {
-
     /// Validate parameters
     pub fn validate(&self) -> Result<(), String> {
         if self.constraint_length == 0 {

@@ -76,15 +76,13 @@ fn validate_lossless_format(path: &Path) -> anyhow::Result<()> {
     if let Some(ext) = path.extension() {
         let ext_lower = ext.to_string_lossy().to_lowercase();
         match ext_lower.as_str() {
-            "jpg" | "jpeg" => {
-                Err(anyhow::anyhow!(
-                    "❌ JPEG is lossy and will destroy hidden data!\n\
+            "jpg" | "jpeg" => Err(anyhow::anyhow!(
+                "❌ JPEG is lossy and will destroy hidden data!\n\
                      Please use a lossless format:\n\
                      • PNG (recommended) - .png\n\
                      • BMP - .bmp\n\
                      • TIFF - .tif/.tiff"
-                ))
-            }
+            )),
             "png" | "bmp" | "tif" | "tiff" => Ok(()),
             _ => {
                 eprintln!(

@@ -12,6 +12,8 @@ use base64::Engine;
 use aes_gcm::{Aes256Gcm, aead::{Aead, KeyInit, generic_array::GenericArray}};
 use rand::{RngCore, SeedableRng};
 use rand::seq::SliceRandom;
+use hkdf::Hkdf;
+use sha2::Sha256 as HmacSha256;
 
 const VERSION: u8 = 3; // bumped for deterministic position encoding
 // Public header: version (1) + nonce (12) + ciphertext_len (4) + position_count (4) = 21 bytes
@@ -326,20 +328,40 @@ fn get_build_secret() -> [u8; 32] {
     out
 }
 
+/// Modern HKDF-based key derivation for AEAD encryption
+/// Uses HKDF-SHA256 with domain separation
 fn kdf_aead_key(build_secret: &[u8; 32]) -> [u8; 32] {
-    // Simple domain-separated SHA-256 KDF
-    let mut hasher = Sha256::new();
-    hasher.update(b"TEEHEE_KDF_AES256");
-    hasher.update(build_secret);
-    hasher.finalize().into()
+    type HkdfSha256 = Hkdf<HmacSha256>;
+    
+    // HKDF with no salt (build_secret is already high-entropy)
+    let hk = HkdfSha256::new(None, build_secret);
+    
+    let mut okm = [0u8; 32];
+    // Domain-separated info string for AES-256-GCM key
+    hk.expand(b"TEEHEE_HKDF_AES256_v1", &mut okm)
+        .expect("HKDF expand should never fail with valid length");
+    
+    okm
 }
 
+/// Modern HKDF-based seed derivation for CSPRNG permutation
+/// Uses HKDF-SHA256 with nonce as additional context
 fn kdf_payload_seed(build_secret: &[u8; 32], nonce: &[u8; 12]) -> [u8; 32] {
-    let mut hasher = Sha256::new();
-    hasher.update(b"TEEHEE_KDF_PAYLOAD");
-    hasher.update(build_secret);
-    hasher.update(nonce);
-    hasher.finalize().into()
+    type HkdfSha256 = Hkdf<HmacSha256>;
+    
+    // HKDF with no salt (build_secret is already high-entropy)
+    let hk = HkdfSha256::new(None, build_secret);
+    
+    let mut okm = [0u8; 32];
+    // Construct info string: domain separator + nonce
+    let mut info = Vec::with_capacity(24 + 12);
+    info.extend_from_slice(b"TEEHEE_HKDF_PAYLOAD_v1");
+    info.extend_from_slice(nonce);
+    
+    hk.expand(&info, &mut okm)
+        .expect("HKDF expand should never fail with valid length");
+    
+    okm
 }
 
 fn encrypt_message(build_secret: &[u8; 32], plaintext: &[u8]) -> Result<(Vec<u8>, [u8; 12])> {

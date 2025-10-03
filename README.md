@@ -1,5 +1,5 @@
 ![Before and After Steganography](readme.png)
-*Original image vs. steganography-embedded image — visually identical, yet one contains hidden encrypted data*
+*Original image vs. steganography-embedded image — yet one contains hidden encrypted data\**
 
 # Teehee~
 
@@ -111,5 +111,5 @@ This tool is intended for legitimate and legal uses only. Users are responsible 
 
 ---
 
-\* The sample image used in the demonstration (`readme.png`) is artwork by [チャイ](https://www.pixiv.net/users/3970196) on pixiv. The hidden message extracted from the steganography example is the artwork URL: https://www.pixiv.net/artworks/131246732. All rights to the original artwork belong to the author.
+\* The sample image used in the demonstration (`readme.png`) is artwork by [チャイ](https://www.pixiv.net/users/1096811) on pixiv. The hidden message extracted from the steganography example is the artwork URL: https://www.pixiv.net/artworks/131246732. All rights to the original artwork belong to the author.
 

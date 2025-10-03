@@ -62,6 +62,12 @@ pub struct TeeheeStego {
     user_key: Option<String>,
 }
 
+impl Default for TeeheeStego {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TeeheeStego {
     /// Create a new TeeheeStego instance using only build-time secret
     pub fn new() -> Self {
@@ -195,8 +201,7 @@ impl TeeheeStego {
         // Build cover bits and costs for STC
         let mut cover_bits: Vec<u8> = Vec::with_capacity(payload_positions.len());
         let mut costs: Vec<u32> = Vec::with_capacity(payload_positions.len());
-        for i in 0..payload_positions.len() {
-            let pos = payload_positions[i];
+        for (i, &pos) in payload_positions.iter().enumerate() {
             let x = (pos as u32) % width;
             let y = (pos as u32) / width;
             let pixel = carrier_rgb.get_pixel(x, y);
@@ -508,7 +513,7 @@ fn get_build_secret() -> [u8; 32] {
 
     // Step 3: Verify integrity hash (defense-in-depth)
     let mut hasher = Sha256::new();
-    hasher.update(&secret);
+    hasher.update(secret);
     let computed_hash = hasher.finalize();
     let computed_short = &computed_hash[..16];
 
@@ -806,7 +811,7 @@ fn bytes_to_bits(data: &[u8]) -> Vec<u8> {
 }
 
 fn bits_to_bytes(bits: &[u8]) -> Vec<u8> {
-    let mut out = vec![0u8; (bits.len() + 7) / 8];
+    let mut out = vec![0u8; bits.len().div_ceil(8)];
     for (i, &bit) in bits.iter().enumerate() {
         let byte_idx = i / 8;
         let bit_pos = 7 - (i % 8);
@@ -837,12 +842,10 @@ fn embed_bit_lsb_match_with_dir(value: u8, bit: u8, sign_up: bool) -> u8 {
         } else {
             value.saturating_add(1)
         }
+    } else if value == 0 {
+        value.saturating_add(1)
     } else {
-        if value == 0 {
-            value.saturating_add(1)
-        } else {
-            value.saturating_sub(1)
-        }
+        value.saturating_sub(1)
     }
 }
 
@@ -975,11 +978,11 @@ fn calculate_uniward_cost(
         kernel: &[[i32; 3]; 3],
     ) -> i64 {
         let mut sum: i64 = 0;
-        for ky in 0..3 {
-            for kx in 0..3 {
+        for (ky, row) in kernel.iter().enumerate().take(3) {
+            for (kx, &kernel_val) in row.iter().enumerate().take(3) {
                 let ny = center_y + ky - 1;
                 let nx = center_x + kx - 1;
-                sum += (neighborhood[ny][nx] as i64) * (kernel[ky][kx] as i64);
+                sum += (neighborhood[ny][nx] as i64) * (kernel_val as i64);
             }
         }
         sum
@@ -1297,9 +1300,9 @@ mod tests {
         let suit_edge = embedding_suitability(&img, 5, 5, 0, 10, 10);
 
         // All suitabilities should be in [0, 1]
-        assert!(suit_uniform >= 0.0 && suit_uniform <= 1.0);
-        assert!(suit_texture >= 0.0 && suit_texture <= 1.0);
-        assert!(suit_edge >= 0.0 && suit_edge <= 1.0);
+        assert!((0.0..=1.0).contains(&suit_uniform));
+        assert!((0.0..=1.0).contains(&suit_texture));
+        assert!((0.0..=1.0).contains(&suit_edge));
 
         // Texture/uniform should be better than strong edge
         assert!(

@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 use image::{DynamicImage, ImageReader};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use teehee::TeeheeStego;
 
 /// Teehee~ - Advanced Steganography Tool
@@ -72,18 +72,18 @@ fn print_banner() {
 }
 
 /// Validate that the output format is lossless
-fn validate_lossless_format(path: &PathBuf) -> anyhow::Result<()> {
+fn validate_lossless_format(path: &Path) -> anyhow::Result<()> {
     if let Some(ext) = path.extension() {
         let ext_lower = ext.to_string_lossy().to_lowercase();
         match ext_lower.as_str() {
             "jpg" | "jpeg" => {
-                return Err(anyhow::anyhow!(
+                Err(anyhow::anyhow!(
                     "❌ JPEG is lossy and will destroy hidden data!\n\
                      Please use a lossless format:\n\
                      • PNG (recommended) - .png\n\
                      • BMP - .bmp\n\
                      • TIFF - .tif/.tiff"
-                ));
+                ))
             }
             "png" | "bmp" | "tif" | "tiff" => Ok(()),
             _ => {

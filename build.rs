@@ -43,7 +43,7 @@ fn derive_build_key() -> [u8; 32] {
 
     // Final KDF: HKDF-like expansion
     let mut hasher = Sha256::new();
-    hasher.update(&key_material);
+    hasher.update(key_material);
     hasher.update(b"TEEHEE_BUILD_KEY_V2");
     let key: [u8; 32] = hasher.finalize().into();
     key
@@ -66,7 +66,7 @@ fn generate_master_secret() -> [u8; 32] {
 
     // Final hash for uniform distribution
     let mut hasher = Sha256::new();
-    hasher.update(&secret);
+    hasher.update(secret);
     hasher.update(b"TEEHEE_MASTER_SECRET_V2");
     let final_secret: [u8; 32] = hasher.finalize().into();
     final_secret
@@ -100,7 +100,7 @@ fn main() {
 
     // Step 4: Randomize fragment count (3-6 fragments)
     let num_real_fragments: usize = 3 + (rand::random::<u8>() % 4) as usize;
-    let fragment_size = (ciphertext.len() + num_real_fragments - 1) / num_real_fragments;
+    let fragment_size = ciphertext.len().div_ceil(num_real_fragments);
 
     // Step 5: Split ciphertext into fragments with padding
     let mut fragments = Vec::new();
@@ -139,12 +139,12 @@ fn main() {
     }
 
     // Step 8: Write metadata (nonce, fragment count, build key)
-    fs::write(fragments_dir.join("nonce.bin"), &nonce_bytes).unwrap();
-    fs::write(fragments_dir.join("build_key.bin"), &build_key).unwrap();
+    fs::write(fragments_dir.join("nonce.bin"), nonce_bytes).unwrap();
+    fs::write(fragments_dir.join("build_key.bin"), build_key).unwrap();
 
     // Compute integrity checksum of master secret (for verification)
     let mut hasher = Sha256::new();
-    hasher.update(&master_secret);
+    hasher.update(master_secret);
     let integrity_hash: [u8; 32] = hasher.finalize().into();
     fs::write(
         fragments_dir.join("integrity.bin"),

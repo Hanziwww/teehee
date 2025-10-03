@@ -104,12 +104,40 @@ fn main() -> anyhow::Result<()> {
 }
 ```
 
+## 🧪 Development
+
+### Git Hooks 安装
+
+为确保代码质量，项目提供了与 GitHub CI 对齐的 pre-commit hook。在提交前会自动运行：
+
+1. 代码格式检查（`cargo fmt --check`）
+2. Clippy 代码检查（`cargo clippy -- -D warnings`）
+3. 运行测试（`cargo test`）
+
+**安装方法**：
+```bash
+git config core.hooksPath .githooks
+```
+
+详见 [`.githooks/README.md`](.githooks/README.md)
+
+### 手动运行检查
+
+```bash
+# 格式化代码
+cargo fmt --all
+
+# Clippy 检查
+cargo clippy --all-targets --all-features -- -D warnings
+
+# 运行测试
+cargo test
+```
 
 ## ⚠️ Disclaimer
 
 This tool is intended for legitimate and legal uses only. Users are responsible for their own actions.
 
----
 
 \* The sample image used in the demonstration (`readme.png`) is artwork by [チャイ](https://www.pixiv.net/users/1096811) on pixiv. The hidden message extracted from the steganography example is the artwork URL: https://www.pixiv.net/artworks/131246732. All rights to the original artwork belong to the author.
 

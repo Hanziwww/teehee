@@ -18,6 +18,7 @@ Cargo.lock
 *.jpeg
 *.bmp
 !examples/*.png
+!readme.png
 
 # Output files
 stego_*

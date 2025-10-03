@@ -20,14 +20,16 @@ pub struct StcParams {
     pub taps: Vec<usize>,
 }
 
-impl StcParams {
-    /// Create default STC parameters (h=7, taps=[0,1,3])
-    pub fn default() -> Self {
+impl Default for StcParams {
+    fn default() -> Self {
         Self {
             constraint_length: 7,
             taps: vec![0, 1, 3],
         }
     }
+}
+
+impl StcParams {
 
     /// Validate parameters
     pub fn validate(&self) -> Result<(), String> {
@@ -185,7 +187,7 @@ pub fn stc_encode_min_cost(
     // Verify syndrome (sanity check - should always pass now)
     #[cfg(debug_assertions)]
     {
-        let syndrome = compute_syndrome(&cover_bits, &flips, params);
+        let syndrome = compute_syndrome(cover_bits, &flips, params);
         let syndrome_prefix: Vec<u8> = syndrome.iter().take(m).copied().collect();
         assert_eq!(
             syndrome_prefix, message_bits,
@@ -253,9 +255,7 @@ pub fn stc_decode(stego_bits: &[u8], params: &StcParams) -> Vec<u8> {
     let mut syndrome = Vec::new();
     let mut state = 0usize;
 
-    for i in 0..n {
-        let bit = stego_bits[i];
-
+    for &bit in stego_bits.iter().take(n) {
         // Compute syndrome bit contribution
         let syndrome_bit = compute_syndrome_bit(state, bit, &params.taps, h);
         syndrome.push(syndrome_bit);

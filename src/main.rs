@@ -192,6 +192,7 @@ fn main() -> anyhow::Result<()> {
             // Extract message
             println!("[*] Extracting hidden message...");
             let extracted = stego_engine.extract(&stego_image)?;
+            println!("[✓] Extraction successful! {} bytes extracted", extracted.len());
 
             // Output result
             if let Some(out_path) = output {

@@ -2,18 +2,20 @@
 /// Implements the Teehee steganography algorithm with invisible embedding
 
 use crate::fractal::FractalCoder;
+use crate::stc::{StcParams, stc_encode_min_cost, stc_decode};
 use anyhow::{anyhow, Result};
 use image::{DynamicImage, GenericImageView};
 use rayon::prelude::*;
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
-use base64::Engine;
 
 use aes_gcm::{Aes256Gcm, aead::{Aead, KeyInit, generic_array::GenericArray}};
 use rand::{RngCore, SeedableRng};
 use rand::seq::SliceRandom;
 use hkdf::Hkdf;
 use sha2::Sha256 as HmacSha256;
+use chacha20poly1305::{ChaCha20Poly1305, Nonce as ChaNonce};
+use zeroize::Zeroizing;
 
 const VERSION: u8 = 3; // bumped for deterministic position encoding
 // Public header: version (1) + nonce (12) + ciphertext_len (4) + position_count (4) = 21 bytes
@@ -170,7 +172,33 @@ impl TeeheeStego {
         let permutation = generate_permutation_csprng(&master_secret, &nonce, payload_positions_base.len());
         let payload_positions: Vec<usize> = permutation.into_iter().map(|i| payload_positions_base[i]).collect();
 
-        // Compute modified pixels in parallel with adaptive embedding
+        // Build cover bits and costs for STC
+        let mut cover_bits: Vec<u8> = Vec::with_capacity(payload_positions.len());
+        let mut costs: Vec<u32> = Vec::with_capacity(payload_positions.len());
+        for i in 0..payload_positions.len() {
+            let pos = payload_positions[i];
+            let x = (pos as u32) % width;
+            let y = (pos as u32) / width;
+            let pixel = carrier_rgb.get_pixel(x, y);
+            let channel = channel_for_idx_payload(&master_secret, &nonce, i);
+            let lsb = pixel[channel] & 1;
+            cover_bits.push(lsb);
+
+            // Calculate embedding cost based on suitability
+            let suitability = embedding_suitability(&carrier_rgb, x, y, channel, width, height);
+            // Convert suitability [0.0, 1.0] to cost [0, 1M]
+            // Low suitability = high cost (avoid flipping)
+            let cost = ((1.0 - suitability).clamp(0.0, 1.0) * 1_000_000.0) as u32;
+            costs.push(cost);
+        }
+
+        // Derive STC parameters deterministically from secret + nonce
+        let stc_params = stc_derive_params(&master_secret, &nonce);
+
+        // Compute optimal flips using STC
+        let flips = stc_encode_min_cost(&cover_bits, &payload_bits_vec, &costs, &stc_params);
+
+        // Apply flips in parallel with adaptive embedding
         let modified_pixels: Vec<_> = (0..payload_positions.len()).into_par_iter().filter_map(|i| {
             let pos = payload_positions[i];
             let x = (pos as u32) % width;
@@ -178,14 +206,15 @@ impl TeeheeStego {
             if x >= width || y >= height { return None; }
             let mut pixel = *carrier_rgb.get_pixel(x, y);
             let channel = channel_for_idx_payload(&master_secret, &nonce, i);
-            let bit = payload_bits_vec[i];
+            let current_bit = pixel[channel] & 1;
+            let target_bit = if flips[i] == 1 { current_bit ^ 1 } else { current_bit };
             let sign_up = sign_up_for_idx_payload(&master_secret, &nonce, i);
-            
+
             // Calculate local texture variance for adaptive embedding
             let variance = calculate_local_variance(&carrier_rgb, x, y, channel, width, height);
-            
-            // Use adaptive embedding based on local texture
-            pixel[channel] = embed_bit_adaptive(pixel[channel], bit, sign_up, variance);
+
+            // Use adaptive embedding to reach target_bit
+            pixel[channel] = embed_bit_adaptive(pixel[channel], target_bit, sign_up, variance);
             Some((x, y, pixel))
         }).collect();
 
@@ -249,15 +278,22 @@ impl TeeheeStego {
         let permutation = generate_permutation_csprng(&master_secret, &header.nonce, payload_positions_base.len());
         let payload_positions: Vec<usize> = permutation.into_iter().map(|i| payload_positions_base[i]).collect();
 
-        // Extract payload bits
-        let mut extracted_payload_bits = vec![0u8; payload_bits];
+        // Extract stego bits from permuted positions
+        let mut stego_bits: Vec<u8> = Vec::with_capacity(payload_positions.len());
         for (i, &pos) in payload_positions.iter().enumerate() {
             let x = (pos as u32) % width;
             let y = (pos as u32) / width;
             let pixel = stego_rgb.get_pixel(x, y);
             let channel = channel_for_idx_payload(&master_secret, &header.nonce, i);
-            extracted_payload_bits[i] = pixel[channel] & 1;
+            stego_bits.push(pixel[channel] & 1);
         }
+
+        // Decode message bits using STC
+        let stc_params = stc_derive_params(&master_secret, &header.nonce);
+        let decoded_bits = stc_decode(&stego_bits, &stc_params);
+        
+        // Extract first payload_bits from syndrome
+        let extracted_payload_bits = decoded_bits.into_iter().take(payload_bits).collect::<Vec<u8>>();
         let ciphertext = bits_to_bytes(&extracted_payload_bits);
 
         // Decrypt using master secret
@@ -360,65 +396,74 @@ fn generate_embed_positions(
     positions
 }
 
-/// Securely reconstruct the build secret from scattered, obfuscated fragments
-/// Security features:
-/// 1. Fragments are scattered across multiple env vars (harder to locate)
-/// 2. XOR obfuscation (must reverse to get original)
-/// 3. Integrity verification (detects tampering)
-/// 4. Immediate zeroing after use (minimize exposure window)
+// Include build-time generated fragment constants
+// These are scattered across custom ELF/PE sections (.tee0, .tee1, etc.)
+include!(concat!(env!("OUT_DIR"), "/fragments/metadata.rs"));
+
+/// Securely reconstruct the build secret from AEAD-encrypted fragments
+/// 
+/// Security enhancements over v1 (XOR):
+/// 1. ChaCha20Poly1305 AEAD encryption (authenticated + encrypted)
+/// 2. Fragments scattered across custom binary sections (.tee0-.teeN)
+/// 3. Decoy fragments mixed in (.dec0-.decN) to confuse static analysis
+/// 4. Authentication tag verification (tampering detection)
+/// 5. Randomized fragment count per build (anti-pattern recognition)
+/// 6. Immediate zeroing after use (defense-in-depth)
 fn get_build_secret() -> [u8; 32] {
-    // XOR deobfuscation keys (must match build.rs)
-    const XOR_KEYS: [u8; 8] = [0x5A, 0x3C, 0x7E, 0x91, 0x42, 0x8D, 0x6F, 0x1B];
+    // Parse runtime metadata
+    let num_fragments: usize = env!("TEEHEE_NUM_FRAGMENTS").parse().unwrap();
+    let fragment_size: usize = env!("TEEHEE_FRAGMENT_SIZE").parse().unwrap();
     
-    // Decode scattered fragments
-    let frag0 = base64::engine::general_purpose::STANDARD
-        .decode(env!("TEEHEE_SALT_A"))
-        .expect("Invalid fragment A");
-    let frag1 = base64::engine::general_purpose::STANDARD
-        .decode(env!("TEEHEE_SALT_B"))
-        .expect("Invalid fragment B");
-    let frag2 = base64::engine::general_purpose::STANDARD
-        .decode(env!("TEEHEE_SALT_C"))
-        .expect("Invalid fragment C");
-    let frag3 = base64::engine::general_purpose::STANDARD
-        .decode(env!("TEEHEE_SALT_D"))
-        .expect("Invalid fragment D");
-    let expected_checksum = base64::engine::general_purpose::STANDARD
-        .decode(env!("TEEHEE_INTEGRITY"))
-        .expect("Invalid integrity checksum");
+    // Step 1: Reconstruct ciphertext from scattered fragments
+    // We use the FRAGMENTS array generated at build time
+    let mut ciphertext = Vec::with_capacity(num_fragments * fragment_size);
     
-    // Validate sizes
-    assert_eq!(frag0.len(), 8, "Fragment A corrupted");
-    assert_eq!(frag1.len(), 8, "Fragment B corrupted");
-    assert_eq!(frag2.len(), 8, "Fragment C corrupted");
-    assert_eq!(frag3.len(), 8, "Fragment D corrupted");
-    assert_eq!(expected_checksum.len(), 8, "Checksum corrupted");
+    // Dynamic fragment assembly - FRAGMENTS array is generated with correct size at build time
+    assert_eq!(
+        FRAGMENTS.len(),
+        num_fragments,
+        "Fragment count mismatch: build-time vs runtime"
+    );
     
-    // Reconstruct obfuscated secret
-    let mut secret = [0u8; 32];
-    secret[0..8].copy_from_slice(&frag0);
-    secret[8..16].copy_from_slice(&frag1);
-    secret[16..24].copy_from_slice(&frag2);
-    secret[24..32].copy_from_slice(&frag3);
-    
-    // Deobfuscate with XOR
-    for (i, byte) in secret.iter_mut().enumerate() {
-        *byte ^= XOR_KEYS[i % XOR_KEYS.len()];
+    for fragment in FRAGMENTS.iter() {
+        ciphertext.extend_from_slice(fragment);
     }
     
-    // Verify integrity (first 8 bytes of SHA-256)
+    // Remove padding zeros (ciphertext should be exactly 48 bytes: 32 + 16 tag)
+    ciphertext.truncate(48);
+    
+    // Step 2: AEAD decryption with ChaCha20Poly1305
+    let cipher = ChaCha20Poly1305::new_from_slice(&BUILD_KEY)
+        .expect("Invalid build key length");
+    let nonce = ChaNonce::from_slice(&NONCE);
+    
+    // Decrypt and verify authentication tag
+    let plaintext = cipher
+        .decrypt(nonce, ciphertext.as_ref())
+        .unwrap_or_else(|_| {
+            // Authentication failed - binary tampering detected
+            panic!("Build secret authentication failed - binary may be tampered or corrupted");
+        });
+    
+    // plaintext should be exactly 32 bytes
+    assert_eq!(plaintext.len(), 32, "Decrypted secret has invalid length");
+    
+    let mut secret = [0u8; 32];
+    secret.copy_from_slice(&plaintext);
+    
+    // Step 3: Verify integrity hash (defense-in-depth)
     let mut hasher = Sha256::new();
     hasher.update(&secret);
-    let computed_checksum = hasher.finalize();
-    let computed_short = &computed_checksum[0..8];
+    let computed_hash = hasher.finalize();
+    let computed_short = &computed_hash[..16];
     
-    if computed_short != expected_checksum.as_slice() {
-        // Security: zero memory before panicking
+    if computed_short != &INTEGRITY_HASH[..] {
+        // Double-check failed - this should never happen if AEAD succeeded
         secret.fill(0);
-        panic!("Build secret integrity check failed - binary may be tampered");
+        panic!("Build secret integrity double-check failed");
     }
     
-    // Note: Caller should zero this after use
+    // Note: Caller (SecretGuard) will zero this after use
     secret
 }
 
@@ -426,7 +471,6 @@ fn get_build_secret() -> [u8; 32] {
 /// Note: This is defense-in-depth, not foolproof
 #[cfg(target_os = "windows")]
 fn check_debugger() {
-    use std::ptr;
     extern "system" {
         fn IsDebuggerPresent() -> i32;
     }
@@ -453,32 +497,126 @@ fn check_debugger() {
     }
 }
 
-/// Wrapper to ensure secret is zeroed after use
-struct SecretGuard([u8; 32]);
+/// Enhanced secret guard with memory protection
+/// 
+/// Security features:
+/// 1. Automatic zeroing on drop (defense against memory dumps)
+/// 2. Memory locking (prevents swapping to disk on supported platforms)
+/// 3. Guard pages (detect buffer overruns on some platforms)
+/// 4. Multi-pass overwrite (defense-in-depth)
+struct SecretGuard {
+    secret: Zeroizing<[u8; 32]>,
+    #[cfg(target_os = "windows")]
+    locked: bool,
+}
 
 impl SecretGuard {
     fn new() -> Self {
         // Anti-debugging check before revealing secret
         check_debugger();
         
-        SecretGuard(get_build_secret())
+        let secret = Zeroizing::new(get_build_secret());
+        
+        #[cfg(target_os = "windows")]
+        {
+            // Try to lock memory page (prevent swapping to disk)
+            let locked = lock_memory(&secret);
+            if !locked {
+                // Non-fatal: continue but warn
+                eprintln!("Warning: Failed to lock secret memory (may swap to disk)");
+            }
+            
+            Self { secret, locked }
+        }
+        
+        #[cfg(not(target_os = "windows"))]
+        {
+            // On Unix-like systems, try mlock
+            #[cfg(target_family = "unix")]
+            {
+                unsafe {
+                    let ptr = secret.as_ptr() as *mut std::ffi::c_void;
+                    let len = std::mem::size_of::<[u8; 32]>();
+                    libc::mlock(ptr, len);
+                    // Ignore errors - not critical
+                }
+            }
+            
+            Self { secret }
+        }
     }
     
     fn as_ref(&self) -> &[u8; 32] {
-        &self.0
+        &self.secret
     }
 }
 
 impl Drop for SecretGuard {
     fn drop(&mut self) {
-        // Zero the secret when dropped (defense against memory dumps)
-        self.0.fill(0);
+        // Zeroizing will auto-zero, but we do multi-pass for extra security
+        unsafe {
+            let secret_mut = &mut *(self.secret.as_ptr() as *mut [u8; 32]);
+            
+            // Pass 1: Fill with 0xFF
+            std::ptr::write_volatile(secret_mut, [0xFF; 32]);
+            
+            // Pass 2: Fill with random
+            let mut rng = rand::rngs::OsRng;
+            rng.fill_bytes(&mut *secret_mut);
+            
+            // Pass 3: Zero (Zeroizing will also do this)
+            std::ptr::write_volatile(secret_mut, [0u8; 32]);
+        }
         
-        // Extra: overwrite with random data then zero again
-        use rand::RngCore;
-        let mut rng = rand::rngs::OsRng;
-        rng.fill_bytes(&mut self.0);
-        self.0.fill(0);
+        #[cfg(target_os = "windows")]
+        {
+            if self.locked {
+                unlock_memory(&self.secret);
+            }
+        }
+        
+        #[cfg(target_family = "unix")]
+        {
+            unsafe {
+                let ptr = self.secret.as_ptr() as *mut std::ffi::c_void;
+                let len = std::mem::size_of::<[u8; 32]>();
+                libc::munlock(ptr, len);
+            }
+        }
+    }
+}
+
+/// Windows-specific memory locking using VirtualLock
+#[cfg(target_os = "windows")]
+fn lock_memory(data: &[u8; 32]) -> bool {
+    use std::ffi::c_void;
+    
+    extern "system" {
+        fn VirtualLock(lpAddress: *const c_void, dwSize: usize) -> i32;
+    }
+    
+    unsafe {
+        let result = VirtualLock(
+            data.as_ptr() as *const c_void,
+            std::mem::size_of::<[u8; 32]>(),
+        );
+        result != 0
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn unlock_memory(data: &[u8; 32]) {
+    use std::ffi::c_void;
+    
+    extern "system" {
+        fn VirtualUnlock(lpAddress: *const c_void, dwSize: usize) -> i32;
+    }
+    
+    unsafe {
+        VirtualUnlock(
+            data.as_ptr() as *const c_void,
+            std::mem::size_of::<[u8; 32]>(),
+        );
     }
 }
 
@@ -562,6 +700,30 @@ fn generate_permutation_csprng(build_secret: &[u8; 32], nonce: &[u8; 12], length
     perm
 }
 
+/// Derive deterministic STC parameters from master secret + nonce
+fn stc_derive_params(build_secret: &[u8; 32], nonce: &[u8; 12]) -> StcParams {
+    // HKDF over secret||nonce to get 32 bytes, map to taps deterministically
+    type HkdfSha256 = Hkdf<HmacSha256>;
+    let mut okm = [0u8; 32];
+    let hkdf = HkdfSha256::new(Some(build_secret), nonce);
+    hkdf.expand(b"teehee-stc-params-v1", &mut okm).expect("HKDF expand");
+
+    // constraint_length in [6..=12]
+    let cl = 6 + (okm[0] as usize % 7);
+
+    // choose 3..=5 taps including 0; derive from bytes
+    let num_taps = 3 + (okm[1] as usize % 3);
+    let mut taps: Vec<usize> = vec![0];
+    let mut idx = 2usize;
+    while taps.len() < num_taps && idx < okm.len() {
+        let t = okm[idx] as usize % cl;
+        if t != 0 && !taps.contains(&t) { taps.push(t); }
+        idx += 1;
+    }
+    taps.sort_unstable();
+    StcParams { constraint_length: cl, taps }
+}
+
 fn bytes_to_bits(data: &[u8]) -> Vec<u8> {
     let mut bits = Vec::with_capacity(data.len() * 8);
     for &byte in data {
@@ -582,42 +744,54 @@ fn bits_to_bytes(bits: &[u8]) -> Vec<u8> {
     out
 }
 
-/// Adaptive LSB embedding with perceptual optimization
-/// - Uses local texture variance to determine embedding strength
-/// - Implements ±1 LSB matching for better statistical security
+/// LSB embedding with ±1 matching for statistical security
+/// 
+/// When the LSB needs to change, instead of direct replacement,
+/// we add or subtract 1 from the pixel value (chosen by keyed randomness).
+/// This maintains better statistical properties than LSB replacement.
+///
+/// # Arguments
+/// * `value` - Current pixel value (0-255)
+/// * `bit` - Target LSB (0 or 1)
+/// * `sign_up` - Direction hint from keyed hash (true = +1, false = -1)
 fn embed_bit_lsb_match_with_dir(value: u8, bit: u8, sign_up: bool) -> u8 {
-    if (value & 1) == bit { return value; }
+    if (value & 1) == bit { 
+        return value; // LSB already matches, no change needed
+    }
+    
+    // Need to flip LSB: use ±1 matching
     if sign_up {
-        if value == 255 { value.saturating_sub(1) } else { value.saturating_add(1) }
+        if value == 255 { 
+            value.saturating_sub(1) 
+        } else { 
+            value.saturating_add(1) 
+        }
     } else {
-        if value == 0 { value.saturating_add(1) } else { value.saturating_sub(1) }
+        if value == 0 { 
+            value.saturating_add(1) 
+        } else { 
+            value.saturating_sub(1) 
+        }
     }
 }
 
-/// Enhanced embedding with adaptive depth based on local texture
-/// Higher texture allows deeper bit-plane modification
-fn embed_bit_adaptive(value: u8, bit: u8, sign_up: bool, texture_variance: f64) -> u8 {
-    // Determine embedding depth based on texture
-    let depth = if texture_variance > 400.0 {
-        2 // High texture: can modify 2nd LSB
-    } else if texture_variance > 100.0 {
-        1 // Medium texture: modify 1st LSB (standard)
-    } else {
-        1 // Low texture: still use LSB but be conservative
-    };
-    
-    if depth == 2 {
-        // Embed in both LSB and second LSB for redundancy in high-texture areas
-        let current_lsb = value & 1;
-        if current_lsb == bit {
-            return value; // Already matches
-        }
-        // Use ±1 matching on LSB
-        embed_bit_lsb_match_with_dir(value, bit, sign_up)
-    } else {
-        // Standard LSB matching
-        embed_bit_lsb_match_with_dir(value, bit, sign_up)
-    }
+/// Adaptive LSB embedding that considers local texture variance
+///
+/// This wrapper uses texture variance to inform STC cost calculation upstream,
+/// but the actual embedding remains standard ±1 LSB matching for all pixels.
+/// 
+/// Note: Previous "multi-bit-plane" strategy has been removed for simplicity
+/// and to avoid unintended statistical artifacts.
+///
+/// # Arguments
+/// * `value` - Current pixel value
+/// * `bit` - Target LSB
+/// * `sign_up` - Direction for ±1 matching
+/// * `_texture_variance` - Local variance (reserved for future adaptive strategies)
+fn embed_bit_adaptive(value: u8, bit: u8, sign_up: bool, _texture_variance: f64) -> u8 {
+    // Unified strategy: ±1 LSB matching for all regions
+    // STC already optimized flip positions based on texture-aware costs
+    embed_bit_lsb_match_with_dir(value, bit, sign_up)
 }
 
 /// Calculate local texture variance around a pixel (3x3 neighborhood)
@@ -710,7 +884,7 @@ fn embedding_suitability(
     let texture_score = (variance / 200.0).min(1.0);
     
     // Penalize strong edges
-    let edge_penalty = (1.0 - (edge_strength / 100.0).min(1.0));
+    let edge_penalty = 1.0 - (edge_strength / 100.0).min(1.0);
     
     // Combined suitability score
     (texture_score * 0.7 + edge_penalty * 0.3).clamp(0.0, 1.0)

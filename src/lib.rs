@@ -44,10 +44,12 @@
 
 pub mod fractal;
 pub mod steganography;
+pub mod stc;
 
 // Re-export main types for convenience
 pub use fractal::{AffineTransform, FractalBlock, FractalCoder};
 pub use steganography::TeeheeStego;
+pub use stc::{StcParams, stc_encode_min_cost, stc_decode};
 
 /// Library version
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

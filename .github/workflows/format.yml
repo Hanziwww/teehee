@@ -8,18 +8,18 @@ on:
 
 jobs:
   format:
-    name: 检查代码格式
+    name: Check Code Format
     runs-on: ubuntu-latest
     
     steps:
-    - name: 检出代码
+    - name: Checkout code
       uses: actions/checkout@v4
       
-    - name: 安装 Rust 工具链
+    - name: Install Rust toolchain
       uses: dtolnay/rust-toolchain@stable
       with:
         components: rustfmt
         
-    - name: 检查格式
+    - name: Check formatting
       run: cargo fmt --all -- --check
 

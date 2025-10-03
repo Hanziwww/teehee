@@ -8,17 +8,17 @@ on:
 
 jobs:
   test:
-    name: 测试
+    name: Test
     runs-on: ubuntu-latest
     
     steps:
-    - name: 检出代码
+    - name: Checkout code
       uses: actions/checkout@v4
       
-    - name: 安装 Rust 工具链
+    - name: Install Rust toolchain
       uses: dtolnay/rust-toolchain@stable
       
-    - name: 缓存依赖
+    - name: Cache dependencies
       uses: actions/cache@v3
       with:
         path: |
@@ -29,41 +29,41 @@ jobs:
           target/
         key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
         
-    - name: 构建
+    - name: Build
       run: cargo build --verbose
       
-    - name: 运行测试
+    - name: Run tests
       run: cargo test --verbose
 
   clippy:
-    name: Clippy 代码检查
+    name: Clippy
     runs-on: ubuntu-latest
     
     steps:
-    - name: 检出代码
+    - name: Checkout code
       uses: actions/checkout@v4
       
-    - name: 安装 Rust 工具链
+    - name: Install Rust toolchain
       uses: dtolnay/rust-toolchain@stable
       with:
         components: clippy
         
-    - name: 运行 Clippy
+    - name: Run Clippy
       run: cargo clippy -- -D warnings
 
   format:
-    name: 代码格式检查
+    name: Format Check
     runs-on: ubuntu-latest
     
     steps:
-    - name: 检出代码
+    - name: Checkout code
       uses: actions/checkout@v4
       
-    - name: 安装 Rust 工具链
+    - name: Install Rust toolchain
       uses: dtolnay/rust-toolchain@stable
       with:
         components: rustfmt
         
-    - name: 检查格式
+    - name: Check formatting
       run: cargo fmt --all -- --check
 

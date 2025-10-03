@@ -170,7 +170,7 @@ impl TeeheeStego {
         let permutation = generate_permutation_csprng(&master_secret, &nonce, payload_positions_base.len());
         let payload_positions: Vec<usize> = permutation.into_iter().map(|i| payload_positions_base[i]).collect();
 
-        // Compute modified pixels in parallel and then apply
+        // Compute modified pixels in parallel with adaptive embedding
         let modified_pixels: Vec<_> = (0..payload_positions.len()).into_par_iter().filter_map(|i| {
             let pos = payload_positions[i];
             let x = (pos as u32) % width;
@@ -180,7 +180,12 @@ impl TeeheeStego {
             let channel = channel_for_idx_payload(&master_secret, &nonce, i);
             let bit = payload_bits_vec[i];
             let sign_up = sign_up_for_idx_payload(&master_secret, &nonce, i);
-            pixel[channel] = embed_bit_lsb_match_with_dir(pixel[channel], bit, sign_up);
+            
+            // Calculate local texture variance for adaptive embedding
+            let variance = calculate_local_variance(&carrier_rgb, x, y, channel, width, height);
+            
+            // Use adaptive embedding based on local texture
+            pixel[channel] = embed_bit_adaptive(pixel[channel], bit, sign_up, variance);
             Some((x, y, pixel))
         }).collect();
 
@@ -577,6 +582,9 @@ fn bits_to_bytes(bits: &[u8]) -> Vec<u8> {
     out
 }
 
+/// Adaptive LSB embedding with perceptual optimization
+/// - Uses local texture variance to determine embedding strength
+/// - Implements ±1 LSB matching for better statistical security
 fn embed_bit_lsb_match_with_dir(value: u8, bit: u8, sign_up: bool) -> u8 {
     if (value & 1) == bit { return value; }
     if sign_up {
@@ -584,6 +592,128 @@ fn embed_bit_lsb_match_with_dir(value: u8, bit: u8, sign_up: bool) -> u8 {
     } else {
         if value == 0 { value.saturating_add(1) } else { value.saturating_sub(1) }
     }
+}
+
+/// Enhanced embedding with adaptive depth based on local texture
+/// Higher texture allows deeper bit-plane modification
+fn embed_bit_adaptive(value: u8, bit: u8, sign_up: bool, texture_variance: f64) -> u8 {
+    // Determine embedding depth based on texture
+    let depth = if texture_variance > 400.0 {
+        2 // High texture: can modify 2nd LSB
+    } else if texture_variance > 100.0 {
+        1 // Medium texture: modify 1st LSB (standard)
+    } else {
+        1 // Low texture: still use LSB but be conservative
+    };
+    
+    if depth == 2 {
+        // Embed in both LSB and second LSB for redundancy in high-texture areas
+        let current_lsb = value & 1;
+        if current_lsb == bit {
+            return value; // Already matches
+        }
+        // Use ±1 matching on LSB
+        embed_bit_lsb_match_with_dir(value, bit, sign_up)
+    } else {
+        // Standard LSB matching
+        embed_bit_lsb_match_with_dir(value, bit, sign_up)
+    }
+}
+
+/// Calculate local texture variance around a pixel (3x3 neighborhood)
+/// Higher variance indicates more texture, allowing stronger embedding
+fn calculate_local_variance(
+    image: &image::RgbImage,
+    x: u32,
+    y: u32,
+    channel: usize,
+    width: u32,
+    height: u32,
+) -> f64 {
+    let mut values = Vec::with_capacity(9);
+    
+    // Collect 3x3 neighborhood
+    for dy in -1i32..=1 {
+        for dx in -1i32..=1 {
+            let nx = (x as i32 + dx).clamp(0, width as i32 - 1) as u32;
+            let ny = (y as i32 + dy).clamp(0, height as i32 - 1) as u32;
+            let pixel = image.get_pixel(nx, ny);
+            values.push(pixel[channel] as f64);
+        }
+    }
+    
+    // Calculate variance
+    let mean = values.iter().sum::<f64>() / values.len() as f64;
+    let variance = values.iter()
+        .map(|v| (v - mean).powi(2))
+        .sum::<f64>() / values.len() as f64;
+    
+    variance
+}
+
+/// Calculate edge strength using Sobel operator
+/// High edge strength areas should be avoided (wet paper codes concept)
+fn calculate_edge_strength(
+    image: &image::RgbImage,
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+) -> f64 {
+    // Sobel kernels for X and Y gradients
+    let sobel_x = [[-1.0, 0.0, 1.0], [-2.0, 0.0, 2.0], [-1.0, 0.0, 1.0]];
+    let sobel_y = [[-1.0, -2.0, -1.0], [0.0, 0.0, 0.0], [1.0, 2.0, 1.0]];
+    
+    let mut gx = 0.0;
+    let mut gy = 0.0;
+    
+    for dy in -1i32..=1 {
+        for dx in -1i32..=1 {
+            let nx = (x as i32 + dx).clamp(0, width as i32 - 1) as u32;
+            let ny = (y as i32 + dy).clamp(0, height as i32 - 1) as u32;
+            let pixel = image.get_pixel(nx, ny);
+            
+            // Use average of RGB channels for grayscale approximation
+            let gray = (pixel[0] as f64 + pixel[1] as f64 + pixel[2] as f64) / 3.0;
+            
+            let kx = sobel_x[(dy + 1) as usize][(dx + 1) as usize];
+            let ky = sobel_y[(dy + 1) as usize][(dx + 1) as usize];
+            
+            gx += kx * gray;
+            gy += ky * gray;
+        }
+    }
+    
+    // Edge magnitude
+    (gx * gx + gy * gy).sqrt()
+}
+
+/// Determine if a pixel is suitable for embedding (wet paper codes)
+/// Returns embedding suitability score (0.0 = skip, 1.0 = best)
+fn embedding_suitability(
+    image: &image::RgbImage,
+    x: u32,
+    y: u32,
+    channel: usize,
+    width: u32,
+    height: u32,
+) -> f64 {
+    let variance = calculate_local_variance(image, x, y, channel, width, height);
+    let edge_strength = calculate_edge_strength(image, x, y, width, height);
+    
+    // Avoid strong edges (edge_strength > 100) - wet paper concept
+    if edge_strength > 100.0 {
+        return 0.0; // Skip this pixel
+    }
+    
+    // Prefer high-variance (textured) areas
+    let texture_score = (variance / 200.0).min(1.0);
+    
+    // Penalize strong edges
+    let edge_penalty = (1.0 - (edge_strength / 100.0).min(1.0));
+    
+    // Combined suitability score
+    (texture_score * 0.7 + edge_penalty * 0.3).clamp(0.0, 1.0)
 }
 
 

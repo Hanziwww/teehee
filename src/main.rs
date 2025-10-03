@@ -71,6 +71,38 @@ fn print_banner() {
     println!();
 }
 
+/// Validate that the output format is lossless (not JPEG)
+fn validate_lossless_format(path: &PathBuf) -> anyhow::Result<()> {
+    if let Some(ext) = path.extension() {
+        let ext_lower = ext.to_string_lossy().to_lowercase();
+        match ext_lower.as_str() {
+            "jpg" | "jpeg" => {
+                return Err(anyhow::anyhow!(
+                    "❌ JPEG is a lossy format and will destroy hidden data!\n\
+                     Please use a lossless format instead:\n\
+                     • PNG (recommended) - .png\n\
+                     • BMP - .bmp\n\
+                     • TIFF - .tif or .tiff\n\
+                     \n\
+                     Example: Change 'stego.jpg' to 'stego.png'"
+                ));
+            }
+            "png" | "bmp" | "tif" | "tiff" => {
+                // Lossless formats are OK
+                Ok(())
+            }
+            _ => {
+                // Warn about unknown formats
+                eprintln!("⚠️  Warning: Unknown format '.{}' - steganography requires lossless formats", ext_lower);
+                eprintln!("    Recommended: PNG, BMP, or TIFF");
+                Ok(())
+            }
+        }
+    } else {
+        Err(anyhow::anyhow!("Output file must have an extension (e.g., .png)"))
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     print_banner();
 
@@ -84,6 +116,9 @@ fn main() -> anyhow::Result<()> {
             file,
             key,
         } => {
+            // Validate output format (must be lossless)
+            validate_lossless_format(&output)?;
+            
             // Load carrier image
             println!("[*] Loading carrier image: {}", input.display());
             let carrier = ImageReader::open(&input)?.decode()?;

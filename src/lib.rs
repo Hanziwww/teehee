@@ -14,7 +14,7 @@
 //! let carrier = Reader::open("cover.png")?.decode()?;
 //!
 //! // Create steganography engine
-//! let stego = TeeheeStego::new(1.0);
+//! let stego = TeeheeStego::new();
 //!
 //! // Embed secret message
 //! let message = b"This is a secret message";
@@ -32,23 +32,20 @@
 //!
 //! ## Features
 //!
-//! - **Chaos-based position/permutation**: Build-salt keyed chaotic sequence
+//! - **CSPRNG-based position/permutation**: Build-salt keyed ChaCha20 random sequences
 //! - **Texture-aware embedding**: Uses fractal analysis to target textured regions
 //! - **AES-256-GCM**: Authenticated encryption of payload
 //! - **Self-contained**: Single image is sufficient for extraction
 //!
 //! ## Modules
 //!
-//! - `chaos`: Chaos theory implementation for pseudo-random generation
 //! - `fractal`: Fractal analysis and block selection
 //! - `steganography`: Main steganography engine
 
-pub mod chaos;
 pub mod fractal;
 pub mod steganography;
 
 // Re-export main types for convenience
-pub use chaos::LogisticMap;
 pub use fractal::{AffineTransform, FractalBlock, FractalCoder};
 pub use steganography::TeeheeStego;
 
@@ -93,7 +90,7 @@ mod integration_tests {
         let carrier = create_test_image();
         let message = b"Hello, this is a secret message for testing!";
 
-        let stego = TeeheeStego::new(1.0);
+        let stego = TeeheeStego::new();
 
         // Embed
         let stego_image = stego.embed(&carrier, message).unwrap();

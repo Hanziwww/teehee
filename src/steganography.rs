@@ -1,7 +1,6 @@
-/// Core steganography module combining chaos and fractal encoding
+/// Core steganography module combining CSPRNG and fractal encoding
 /// Implements the Teehee steganography algorithm with invisible embedding
 
-use crate::chaos::LogisticMap;
 use crate::fractal::FractalCoder;
 use anyhow::{anyhow, Result};
 use image::{DynamicImage, GenericImageView};
@@ -11,16 +10,18 @@ use std::sync::Arc;
 use base64::Engine;
 
 use aes_gcm::{Aes256Gcm, aead::{Aead, KeyInit, generic_array::GenericArray}};
-use rand::RngCore;
+use rand::{RngCore, SeedableRng};
+use rand::seq::SliceRandom;
 
-const VERSION: u8 = 2; // bumped for new format
-// Public header: version (1) + nonce (12) + ciphertext_len (4) = 17 bytes
-const HEADER_SIZE: usize = 17;
+const VERSION: u8 = 3; // bumped for deterministic position encoding
+// Public header: version (1) + nonce (12) + ciphertext_len (4) + position_count (4) = 21 bytes
+const HEADER_SIZE: usize = 21;
 
 struct PublicHeader {
     version: u8,
     nonce: [u8; 12],
     ciphertext_len: u32,
+    position_count: u32, // number of embedding positions (for verification)
 }
 
 impl PublicHeader {
@@ -29,6 +30,7 @@ impl PublicHeader {
         out[0] = self.version;
         out[1..13].copy_from_slice(&self.nonce);
         out[13..17].copy_from_slice(&self.ciphertext_len.to_le_bytes());
+        out[17..21].copy_from_slice(&self.position_count.to_le_bytes());
         out
     }
     fn from_bytes(bytes: &[u8]) -> Result<Self> {
@@ -37,19 +39,17 @@ impl PublicHeader {
         let mut nonce = [0u8; 12];
         nonce.copy_from_slice(&bytes[1..13]);
         let ciphertext_len = u32::from_le_bytes([bytes[13], bytes[14], bytes[15], bytes[16]]);
-        Ok(Self { version, nonce, ciphertext_len })
+        let position_count = u32::from_le_bytes([bytes[17], bytes[18], bytes[19], bytes[20]]);
+        Ok(Self { version, nonce, ciphertext_len, position_count })
     }
 }
 
 /// Main steganography engine
-pub struct TeeheeStego {
-    strength: f64,
-}
+pub struct TeeheeStego;
 
 impl TeeheeStego {
-    pub fn new(strength: f64) -> Self {
-        let strength = strength.clamp(0.5, 2.0);
-        Self { strength }
+    pub fn new() -> Self {
+        Self
     }
 
     /// Embed secret message into carrier image with invisible method (texture-aware + chaos)
@@ -66,11 +66,9 @@ impl TeeheeStego {
         // Encrypt message with AES-256-GCM using key derived from build secret
         let (ciphertext, nonce) = encrypt_message(&build_secret, message)?;
 
-        // Prepare public header (minimal, no magic to avoid signatures)
-        let header = PublicHeader { version: VERSION, nonce, ciphertext_len: ciphertext.len() as u32 };
-        let header_bytes = header.to_bytes();
+        // Header will be created after position calculation
 
-        // Build fractal blocks and select high-texture positions
+        // Build fractal blocks using deterministic encoding
         let gray = carrier.to_luma8();
         let fractal_coder = FractalCoder::new();
         let blocks = fractal_coder.encode(&gray);
@@ -78,29 +76,21 @@ impl TeeheeStego {
             return Err(anyhow!("No fractal blocks found"));
         }
 
-        // Select top texture blocks by MSE percentile (e.g., top 60%)
-        let mut mses: Vec<f64> = blocks.iter().map(|b| b.mse).collect();
-        mses.par_sort_by(|a, b| a.partial_cmp(b).unwrap());
-        let idx = (mses.len() as f64 * 0.6) as usize;
-        let threshold = mses.get(idx).copied().unwrap_or(0.0);
+        // Select top texture blocks deterministically (top 60% by quantized MSE)
+        // This avoids floating-point comparison issues across platforms
+        let selected_indices = select_blocks_deterministic(&blocks, 0.6);
+        
+        // Generate embedding positions from selected blocks
+        let embed_positions = generate_embed_positions(&blocks, &selected_indices, width, height);
 
-        let selected_blocks: Vec<_> = blocks.into_par_iter().filter(|b| b.mse >= threshold).collect();
-
-        // Construct base positions from selected blocks
-        let embed_positions: Vec<usize> = selected_blocks.par_iter().flat_map(|block| {
-            let mut positions = Vec::with_capacity(64);
-            for dy in 0..8u32 {
-                for dx in 0..8u32 {
-                    let x = block.range_x + dx;
-                    let y = block.range_y + dy;
-                    if x < width && y < height {
-                        let pos = (y * width + x) as usize;
-                        positions.push(pos);
-                    }
-                }
-            }
-            positions
-        }).collect();
+        // Update header with actual position count for cross-platform verification
+        let header = PublicHeader { 
+            version: VERSION, 
+            nonce, 
+            ciphertext_len: ciphertext.len() as u32,
+            position_count: embed_positions.len() as u32,
+        };
+        let header_bytes = header.to_bytes();
 
         // Each pixel carries 1 bit in 1 channel (hash-chosen). Need enough positions
         let header_bits = HEADER_SIZE * 8;
@@ -138,10 +128,9 @@ impl TeeheeStego {
         // Precompute payload bits
         let payload_bits_vec = bytes_to_bits(&ciphertext);
 
-        // Stage B: payload permutation derived from build secret + nonce
-        let mut payload_perm_rng = build_logistic_for_payload(&build_secret, &nonce);
+        // Stage B: payload permutation derived from build secret + nonce using CSPRNG
         let payload_positions_base: Vec<usize> = embed_positions.iter().skip(header_bits).take(payload_bits).copied().collect();
-        let permutation = generate_permutation_from_rng(&mut payload_perm_rng, payload_positions_base.len());
+        let permutation = generate_permutation_csprng(&build_secret, &nonce, payload_positions_base.len());
         let payload_positions: Vec<usize> = permutation.into_iter().map(|i| payload_positions_base[i]).collect();
 
         // Compute modified pixels in parallel and then apply
@@ -171,26 +160,17 @@ impl TeeheeStego {
 
         let build_secret = get_build_secret();
 
-        // Rebuild positions
+        // Rebuild positions - MUST match embed() exactly using deterministic algorithm
         let gray = stego.to_luma8();
         let fractal_coder = FractalCoder::new();
         let blocks = fractal_coder.encode(&gray);
         if blocks.is_empty() {
             return Err(anyhow!("No fractal blocks found"));
         }
-        let mut mses: Vec<f64> = blocks.iter().map(|b| b.mse).collect();
-        mses.par_sort_by(|a, b| a.partial_cmp(b).unwrap());
-        let idx = (mses.len() as f64 * 0.6) as usize;
-        let threshold = mses.get(idx).copied().unwrap_or(0.0);
-        let selected_blocks: Vec<_> = blocks.into_par_iter().filter(|b| b.mse >= threshold).collect();
-        let embed_positions: Vec<usize> = selected_blocks.par_iter().flat_map(|block| {
-            let mut positions = Vec::with_capacity(64);
-            for dy in 0..8u32 { for dx in 0..8u32 {
-                let x = block.range_x + dx; let y = block.range_y + dy;
-                if x < width && y < height { positions.push((y * width + x) as usize); }
-            }}
-            positions
-        }).collect();
+        
+        // Use deterministic block selection (same as embed)
+        let selected_indices = select_blocks_deterministic(&blocks, 0.6);
+        let embed_positions = generate_embed_positions(&blocks, &selected_indices, width, height);
 
         // First, extract header from first HEADER_SIZE*8 positions
         let header_bits = HEADER_SIZE * 8;
@@ -209,12 +189,21 @@ impl TeeheeStego {
         let header_bytes = bits_to_bytes(&extracted_header_bits);
         let header = PublicHeader::from_bytes(&header_bytes)?;
 
-        // Payload positions are permuted with build secret + nonce
+        // Verify position count matches (cross-platform consistency check)
+        if header.position_count != embed_positions.len() as u32 {
+            return Err(anyhow!(
+                "Position count mismatch! Expected {} positions but found {}. \
+                This may indicate a floating-point determinism issue across platforms.",
+                header.position_count,
+                embed_positions.len()
+            ));
+        }
+
+        // Payload positions are permuted with build secret + nonce using CSPRNG
         let payload_bits = header.ciphertext_len as usize * 8;
         if embed_positions.len() < header_bits + payload_bits { return Err(anyhow!("Insufficient positions for payload")); }
         let payload_positions_base: Vec<usize> = embed_positions.iter().skip(header_bits).take(payload_bits).copied().collect();
-        let mut payload_perm_rng = build_logistic_for_payload(&build_secret, &header.nonce);
-        let permutation = generate_permutation_from_rng(&mut payload_perm_rng, payload_positions_base.len());
+        let permutation = generate_permutation_csprng(&build_secret, &header.nonce, payload_positions_base.len());
         let payload_positions: Vec<usize> = permutation.into_iter().map(|i| payload_positions_base[i]).collect();
 
         // Extract payload bits
@@ -235,27 +224,98 @@ impl TeeheeStego {
 
     /// Calculate capacity in bytes based on current strategy
     pub fn calculate_capacity(image: &DynamicImage) -> usize {
+        let (width, height) = image.dimensions();
         let gray = image.to_luma8();
         let fractal_coder = FractalCoder::new();
         let blocks = fractal_coder.encode(&gray);
         if blocks.is_empty() { return 0; }
-        let mut mses: Vec<f64> = blocks.iter().map(|b| b.mse).collect();
-        mses.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        let idx = (mses.len() as f64 * 0.6) as usize;
-        let threshold = mses.get(idx).copied().unwrap_or(0.0);
-        let positions: usize = blocks.iter().filter(|b| b.mse >= threshold).map(|_| 64usize).sum();
-        if positions <= HEADER_SIZE * 8 { return 0; }
-        (positions - HEADER_SIZE * 8) / 8 // 1 bit per pixel
-    }
-
-    fn hash_seed(&self, seed: &str) -> [u8; 32] {
-        let mut hasher = Sha256::new();
-        hasher.update(seed.as_bytes());
-        hasher.finalize().into()
+        
+        // Use deterministic block selection (same as embed/extract)
+        let selected_indices = select_blocks_deterministic(&blocks, 0.6);
+        let positions = generate_embed_positions(&blocks, &selected_indices, width, height);
+        
+        if positions.len() <= HEADER_SIZE * 8 { return 0; }
+        (positions.len() - HEADER_SIZE * 8) / 8 // 1 bit per pixel
     }
 }
 
 // --- helpers ---
+
+/// Quantize MSE to integer to avoid floating-point cross-platform issues
+/// Multiplies by 1000 and rounds to get deterministic integer values
+fn quantize_mse(mse: f64) -> u64 {
+    (mse * 1000.0).round() as u64
+}
+
+/// Deterministically select blocks based on quantized MSE
+/// Returns block indices in a platform-independent way
+fn select_blocks_deterministic(blocks: &[crate::fractal::FractalBlock], percentile: f64) -> Vec<usize> {
+    if blocks.is_empty() {
+        return Vec::new();
+    }
+    
+    // Create (quantized_mse, original_index) pairs for stable sorting
+    let mut indexed_mses: Vec<(u64, usize)> = blocks
+        .iter()
+        .enumerate()
+        .map(|(idx, block)| (quantize_mse(block.mse), idx))
+        .collect();
+    
+    // Stable sort by quantized MSE (deterministic across platforms)
+    indexed_mses.sort_by(|a, b| a.0.cmp(&b.0));
+    
+    // Calculate threshold index
+    let threshold_idx = (indexed_mses.len() as f64 * percentile) as usize;
+    let threshold_mse = if threshold_idx < indexed_mses.len() {
+        indexed_mses[threshold_idx].0
+    } else {
+        0
+    };
+    
+    // Collect indices of blocks meeting threshold, preserving original order
+    let mut selected_indices: Vec<usize> = indexed_mses
+        .iter()
+        .filter(|(mse, _)| *mse >= threshold_mse)
+        .map(|(_, idx)| *idx)
+        .collect();
+    
+    // Sort by original index to preserve deterministic order
+    selected_indices.sort_unstable();
+    
+    selected_indices
+}
+
+/// Generate embedding positions from selected block indices
+/// This ensures deterministic position generation across platforms
+fn generate_embed_positions(
+    blocks: &[crate::fractal::FractalBlock],
+    selected_indices: &[usize],
+    width: u32,
+    height: u32,
+) -> Vec<usize> {
+    let mut positions = Vec::new();
+    
+    for &block_idx in selected_indices {
+        if block_idx >= blocks.len() {
+            continue;
+        }
+        let block = &blocks[block_idx];
+        
+        // Generate positions in deterministic order (row-major)
+        for dy in 0..8u32 {
+            for dx in 0..8u32 {
+                let x = block.range_x + dx;
+                let y = block.range_y + dy;
+                if x < width && y < height {
+                    let pos = (y * width + x) as usize;
+                    positions.push(pos);
+                }
+            }
+        }
+    }
+    
+    positions
+}
 
 fn get_build_secret() -> [u8; 32] {
     let b64 = env!("TEEHEE_BUILD_SALT_B64");
@@ -282,13 +342,6 @@ fn kdf_payload_seed(build_secret: &[u8; 32], nonce: &[u8; 12]) -> [u8; 32] {
     hasher.finalize().into()
 }
 
-fn kdf_header_seed(build_secret: &[u8; 32]) -> [u8; 32] {
-    let mut hasher = Sha256::new();
-    hasher.update(b"TEEHEE_KDF_HEADER");
-    hasher.update(build_secret);
-    hasher.finalize().into()
-}
-
 fn encrypt_message(build_secret: &[u8; 32], plaintext: &[u8]) -> Result<(Vec<u8>, [u8; 12])> {
     let key_bytes = kdf_aead_key(build_secret);
     let key = GenericArray::from_slice(&key_bytes);
@@ -311,19 +364,26 @@ fn decrypt_message(build_secret: &[u8; 32], nonce: &[u8; 12], ciphertext: &[u8])
     Ok(plaintext)
 }
 
-fn build_logistic_for_payload(build_secret: &[u8; 32], nonce: &[u8; 12]) -> LogisticMap {
-    let seed = hex_string(kdf_payload_seed(build_secret, nonce));
-    LogisticMap::new(&seed)
-}
-
-fn hex_string(bytes: [u8; 32]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut s = String::with_capacity(64);
-    for &b in bytes.iter() {
-        s.push(HEX[(b >> 4) as usize] as char);
-        s.push(HEX[(b & 0x0f) as usize] as char);
+/// Generate a deterministic permutation using ChaCha-based CSPRNG
+/// This is cryptographically secure and cross-platform deterministic
+fn generate_permutation_csprng(build_secret: &[u8; 32], nonce: &[u8; 12], length: usize) -> Vec<usize> {
+    if length == 0 {
+        return Vec::new();
     }
-    s
+    
+    // Derive a 32-byte seed from build_secret and nonce
+    let seed_bytes = kdf_payload_seed(build_secret, nonce);
+    
+    // Create ChaCha-based RNG from seed
+    let mut rng = rand::rngs::StdRng::from_seed(seed_bytes);
+    
+    // Generate permutation using Fisher-Yates shuffle
+    let mut perm: Vec<usize> = (0..length).collect();
+    
+    // Use SliceRandom::shuffle which implements Fisher-Yates
+    perm.shuffle(&mut rng);
+    
+    perm
 }
 
 fn bytes_to_bits(data: &[u8]) -> Vec<u8> {
@@ -355,15 +415,6 @@ fn embed_bit_lsb_match_with_dir(value: u8, bit: u8, sign_up: bool) -> u8 {
     }
 }
 
-fn generate_permutation_from_rng(rng: &mut LogisticMap, length: usize) -> Vec<usize> {
-    // Fisher-Yates with chaotic RNG
-    let mut perm: Vec<usize> = (0..length).collect();
-    for i in (1..length).rev() {
-        let j = ((rng.next() * (i as f64 + 1.0)) as usize).min(i);
-        perm.swap(i, j);
-    }
-    perm
-}
 
 fn channel_for_idx_header(build_secret: &[u8; 32], idx: usize) -> usize {
     let mut h = Sha256::new();

@@ -1,12 +1,8 @@
-mod chaos;
-mod fractal;
-mod steganography;
-
 use clap::{Parser, Subcommand};
 use image::ImageReader;
 use std::fs;
 use std::path::PathBuf;
-use steganography::TeeheeStego;
+use teehee::TeeheeStego;
 
 /// Teehee~ - Advanced Fractal-Chaos Steganography Tool
 /// 
@@ -40,10 +36,6 @@ enum Commands {
         /// Secret message file path
         #[arg(short, long)]
         file: Option<PathBuf>,
-
-        /// Embedding strength (0.5-2.0, default: 1.0)
-        #[arg(short, long, default_value = "1.0")]
-        strength: f64,
     },
     /// Extract hidden message from stego image (self-decrypting)
     Extract {
@@ -82,7 +74,6 @@ fn main() -> anyhow::Result<()> {
             output,
             message,
             file,
-            strength,
         } => {
             // Load carrier image
             println!("[*] Loading carrier image: {}", input.display());
@@ -108,7 +99,7 @@ fn main() -> anyhow::Result<()> {
             );
 
             // Create steganography engine
-            let stego_engine = TeeheeStego::new(strength);
+            let stego_engine = TeeheeStego::new();
 
             // Check capacity
             let capacity = TeeheeStego::calculate_capacity(&carrier);
@@ -140,7 +131,7 @@ fn main() -> anyhow::Result<()> {
             println!("[✓] Image loaded: {}x{}", stego_image.width(), stego_image.height());
 
             // Create steganography engine
-            let stego_engine = TeeheeStego::new(1.0);
+            let stego_engine = TeeheeStego::new();
 
             // Extract message
             println!("[*] Extracting hidden message...");

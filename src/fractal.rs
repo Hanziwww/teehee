@@ -49,11 +49,11 @@ impl FractalCoder {
         }
     }
     
-    /// Encode image into fractal blocks (multi-threaded)
+    /// Encode image into fractal blocks (multi-threaded, deterministic order)
     pub fn encode(&self, image: &GrayImage) -> Vec<FractalBlock> {
         let (width, height) = image.dimensions();
         
-        // Generate all block positions
+        // Generate all block positions in deterministic order (row-major)
         let positions: Vec<(u32, u32)> = (0..height)
             .step_by(self.block_size as usize)
             .flat_map(|y| {
@@ -63,10 +63,19 @@ impl FractalCoder {
             })
             .collect();
         
-        // Process blocks in parallel
-        positions
+        // Process blocks in parallel but preserve deterministic order
+        let mut results: Vec<(usize, Option<FractalBlock>)> = positions
             .par_iter()
-            .filter_map(|&(x, y)| self.find_best_match(image, x, y))
+            .enumerate()
+            .map(|(idx, &(x, y))| (idx, self.find_best_match(image, x, y)))
+            .collect();
+        
+        // Sort by index to restore deterministic order
+        results.sort_by_key(|(idx, _)| *idx);
+        
+        // Filter out None values
+        results.into_iter()
+            .filter_map(|(_, block)| block)
             .collect()
     }
     

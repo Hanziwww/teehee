@@ -36,6 +36,10 @@ enum Commands {
         /// Secret message file path
         #[arg(short, long)]
         file: Option<PathBuf>,
+
+        /// Optional user key (combined with build-time secret for dual-factor encryption)
+        #[arg(short, long)]
+        key: Option<String>,
     },
     /// Extract hidden message from stego image (self-decrypting)
     Extract {
@@ -46,6 +50,10 @@ enum Commands {
         /// Output file for extracted message (optional)
         #[arg(short = 'O', long)]
         output: Option<PathBuf>,
+
+        /// Optional user key (must match the key used during embedding)
+        #[arg(short, long)]
+        key: Option<String>,
     },
     /// Show image capacity information
     Info {
@@ -74,6 +82,7 @@ fn main() -> anyhow::Result<()> {
             output,
             message,
             file,
+            key,
         } => {
             // Load carrier image
             println!("[*] Loading carrier image: {}", input.display());
@@ -98,8 +107,14 @@ fn main() -> anyhow::Result<()> {
                 message_bytes.len() * 8
             );
 
-            // Create steganography engine
-            let stego_engine = TeeheeStego::new();
+            // Create steganography engine with optional user key
+            let stego_engine = if let Some(user_key) = key {
+                println!("[*] Using dual-factor encryption (build secret + user key)");
+                TeeheeStego::with_user_key(&user_key)
+            } else {
+                println!("[*] Using build-time secret only");
+                TeeheeStego::new()
+            };
 
             // Check capacity
             let capacity = TeeheeStego::calculate_capacity(&carrier);
@@ -124,14 +139,20 @@ fn main() -> anyhow::Result<()> {
             println!("[✓] Success! Message embedded.");
         }
 
-        Commands::Extract { stego, output } => {
+        Commands::Extract { stego, output, key } => {
             // Load stego image
             println!("[*] Loading stego image: {}", stego.display());
             let stego_image = ImageReader::open(&stego)?.decode()?;
             println!("[✓] Image loaded: {}x{}", stego_image.width(), stego_image.height());
 
-            // Create steganography engine
-            let stego_engine = TeeheeStego::new();
+            // Create steganography engine with optional user key
+            let stego_engine = if let Some(user_key) = key {
+                println!("[*] Using dual-factor decryption (build secret + user key)");
+                TeeheeStego::with_user_key(&user_key)
+            } else {
+                println!("[*] Using build-time secret only");
+                TeeheeStego::new()
+            };
 
             // Extract message
             println!("[*] Extracting hidden message...");

@@ -47,11 +47,46 @@ impl PublicHeader {
 }
 
 /// Main steganography engine
-pub struct TeeheeStego;
+pub struct TeeheeStego {
+    user_key: Option<String>,
+}
 
 impl TeeheeStego {
+    /// Create a new TeeheeStego instance using only build-time secret
     pub fn new() -> Self {
-        Self
+        Self { user_key: None }
+    }
+
+    /// Create a new TeeheeStego instance with additional user key
+    /// This enables dual-factor encryption: build secret + user password
+    pub fn with_user_key(user_key: &str) -> Self {
+        Self { 
+            user_key: Some(user_key.to_string()) 
+        }
+    }
+
+    /// Derive the master secret by combining build secret with optional user key
+    fn derive_master_secret(&self) -> [u8; 32] {
+        // Security: Use SecretGuard to auto-zero build secret after use
+        let secret_guard = SecretGuard::new();
+        let build_secret = secret_guard.as_ref();
+
+        match &self.user_key {
+            None => {
+                // Single-factor: use build secret directly
+                *build_secret
+            }
+            Some(user_key) => {
+                // Dual-factor: combine build secret + user key using HKDF
+                type HkdfSha256 = Hkdf<HmacSha256>;
+                
+                let hkdf = HkdfSha256::new(Some(build_secret), user_key.as_bytes());
+                let mut master = [0u8; 32];
+                hkdf.expand(b"teehee-dual-factor-v1", &mut master)
+                    .expect("HKDF expand failed");
+                master
+            }
+        }
     }
 
     /// Embed secret message into carrier image with invisible method (texture-aware + chaos)
@@ -62,12 +97,11 @@ impl TeeheeStego {
 
         let (width, height) = carrier.dimensions();
 
-        // Security: Use SecretGuard to auto-zero secret after use
-        let secret_guard = SecretGuard::new();
-        let build_secret = secret_guard.as_ref();
+        // Derive master secret (build secret + optional user key)
+        let master_secret = self.derive_master_secret();
 
-        // Encrypt message with AES-256-GCM using key derived from build secret
-        let (ciphertext, nonce) = encrypt_message(build_secret, message)?;
+        // Encrypt message with AES-256-GCM using derived master secret
+        let (ciphertext, nonce) = encrypt_message(&master_secret, message)?;
 
         // Header will be created after position calculation
 
@@ -121,9 +155,9 @@ impl TeeheeStego {
             let x = (pos as u32) % width;
             let y = (pos as u32) / width;
             let mut pixel = *carrier_rgb.get_pixel(x, y);
-            let channel = channel_for_idx_header(&build_secret, bit_idx);
+            let channel = channel_for_idx_header(&master_secret, bit_idx);
             let bit = header_bits_vec[bit_idx];
-            let sign_up = sign_up_for_idx_header(&build_secret, bit_idx);
+            let sign_up = sign_up_for_idx_header(&master_secret, bit_idx);
             pixel[channel] = embed_bit_lsb_match_with_dir(pixel[channel], bit, sign_up);
             stego.put_pixel(x, y, pixel);
         }
@@ -131,9 +165,9 @@ impl TeeheeStego {
         // Precompute payload bits
         let payload_bits_vec = bytes_to_bits(&ciphertext);
 
-        // Stage B: payload permutation derived from build secret + nonce using CSPRNG
+        // Stage B: payload permutation derived from master secret + nonce using CSPRNG
         let payload_positions_base: Vec<usize> = embed_positions.iter().skip(header_bits).take(payload_bits).copied().collect();
-        let permutation = generate_permutation_csprng(&build_secret, &nonce, payload_positions_base.len());
+        let permutation = generate_permutation_csprng(&master_secret, &nonce, payload_positions_base.len());
         let payload_positions: Vec<usize> = permutation.into_iter().map(|i| payload_positions_base[i]).collect();
 
         // Compute modified pixels in parallel and then apply
@@ -143,9 +177,9 @@ impl TeeheeStego {
             let y = (pos as u32) / width;
             if x >= width || y >= height { return None; }
             let mut pixel = *carrier_rgb.get_pixel(x, y);
-            let channel = channel_for_idx_payload(&build_secret, &nonce, i);
+            let channel = channel_for_idx_payload(&master_secret, &nonce, i);
             let bit = payload_bits_vec[i];
-            let sign_up = sign_up_for_idx_payload(&build_secret, &nonce, i);
+            let sign_up = sign_up_for_idx_payload(&master_secret, &nonce, i);
             pixel[channel] = embed_bit_lsb_match_with_dir(pixel[channel], bit, sign_up);
             Some((x, y, pixel))
         }).collect();
@@ -161,9 +195,8 @@ impl TeeheeStego {
     pub fn extract(&self, stego: &DynamicImage) -> Result<Vec<u8>> {
         let (width, height) = stego.dimensions();
 
-        // Security: Use SecretGuard to auto-zero secret after use
-        let secret_guard = SecretGuard::new();
-        let build_secret = secret_guard.as_ref();
+        // Derive master secret (build secret + optional user key)
+        let master_secret = self.derive_master_secret();
 
         // Rebuild positions - MUST match embed() exactly using deterministic algorithm
         let gray = stego.to_luma8();
@@ -188,7 +221,7 @@ impl TeeheeStego {
             let x = (pos as u32) % width;
             let y = (pos as u32) / width;
             let pixel = stego_rgb.get_pixel(x, y);
-            let channel = channel_for_idx_header(&build_secret, bit_idx);
+            let channel = channel_for_idx_header(&master_secret, bit_idx);
             extracted_header_bits[bit_idx] = pixel[channel] & 1;
         }
         let header_bytes = bits_to_bytes(&extracted_header_bits);
@@ -204,11 +237,11 @@ impl TeeheeStego {
             ));
         }
 
-        // Payload positions are permuted with build secret + nonce using CSPRNG
+        // Payload positions are permuted with master secret + nonce using CSPRNG
         let payload_bits = header.ciphertext_len as usize * 8;
         if embed_positions.len() < header_bits + payload_bits { return Err(anyhow!("Insufficient positions for payload")); }
         let payload_positions_base: Vec<usize> = embed_positions.iter().skip(header_bits).take(payload_bits).copied().collect();
-        let permutation = generate_permutation_csprng(&build_secret, &header.nonce, payload_positions_base.len());
+        let permutation = generate_permutation_csprng(&master_secret, &header.nonce, payload_positions_base.len());
         let payload_positions: Vec<usize> = permutation.into_iter().map(|i| payload_positions_base[i]).collect();
 
         // Extract payload bits
@@ -217,13 +250,13 @@ impl TeeheeStego {
             let x = (pos as u32) % width;
             let y = (pos as u32) / width;
             let pixel = stego_rgb.get_pixel(x, y);
-            let channel = channel_for_idx_payload(&build_secret, &header.nonce, i);
+            let channel = channel_for_idx_payload(&master_secret, &header.nonce, i);
             extracted_payload_bits[i] = pixel[channel] & 1;
         }
         let ciphertext = bits_to_bytes(&extracted_payload_bits);
 
-        // Decrypt
-        let plaintext = decrypt_message(&build_secret, &header.nonce, &ciphertext)?;
+        // Decrypt using master secret
+        let plaintext = decrypt_message(&master_secret, &header.nonce, &ciphertext)?;
         Ok(plaintext)
     }
 

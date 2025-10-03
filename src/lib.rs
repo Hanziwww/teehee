@@ -52,6 +52,23 @@ pub use steganography::TeeheeStego;
 /// Library version
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Create a TeeheeStego instance with optional user key (for dual-factor encryption)
+///
+/// # Examples
+///
+/// ```no_run
+/// use teehee::TeeheeStego;
+/// 
+/// // Single-factor: build-time secret only
+/// let stego1 = TeeheeStego::new();
+///
+/// // Dual-factor: build-time secret + user password
+/// let stego2 = TeeheeStego::with_user_key("my-secret-password");
+/// ```
+pub fn with_user_key(user_key: &str) -> TeeheeStego {
+    TeeheeStego::with_user_key(user_key)
+}
+
 /// Calculate maximum capacity for a given image
 ///
 /// # Examples

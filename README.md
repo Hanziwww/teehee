@@ -115,6 +115,8 @@ fn main() -> anyhow::Result<()> {
 
 Teehee includes a web-based interface for steganography operations. The web application provides a user-friendly GUI for embedding and extracting hidden messages without using the command line.
 
+<img width="1295" height="1407" alt="image" src="https://github.com/user-attachments/assets/16a112b6-24ac-45b2-9382-172a94bcf52b" />
+
 ## Features
 
 - 🖼️ **Visual Interface**: Drag-and-drop image upload and interactive controls

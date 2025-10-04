@@ -4,9 +4,11 @@
 
 Pre-commit hook 会在每次 `git commit` 前自动运行以下检查（与 GitHub CI 流水线完全对齐）：
 
-1. **代码格式检查** - `cargo fmt --all -- --check`
-2. **Clippy 代码检查** - `cargo clippy -- -D warnings`
-3. **运行测试** - `cargo test`
+1. **主项目代码格式检查** - `cargo fmt --all -- --check`
+2. **Web 项目代码格式检查** - `cargo fmt --all --manifest-path web/Cargo.toml -- --check`
+3. **主项目 Clippy 代码检查** - `cargo clippy --all-targets --all-features -- -D warnings`
+4. **Web 项目 Clippy 代码检查** - `cargo clippy --all-targets --all-features --manifest-path web/Cargo.toml -- -D warnings`
+5. **运行所有测试** - `cargo test` (主项目和 Web 项目)
 
 只有所有检查都通过，才允许提交。这可以确保提交的代码质量，避免 CI 失败。
 
@@ -44,14 +46,23 @@ git commit --no-verify -m "urgent fix"
 你也可以手动运行各项检查：
 
 ```bash
-# 格式化代码
+# 格式化主项目代码
 cargo fmt --all
 
-# 运行 Clippy
+# 格式化 Web 项目代码
+cargo fmt --all --manifest-path web/Cargo.toml
+
+# 运行主项目 Clippy
 cargo clippy --all-targets --all-features -- -D warnings
 
-# 运行测试
+# 运行 Web 项目 Clippy
+cargo clippy --all-targets --all-features --manifest-path web/Cargo.toml -- -D warnings
+
+# 运行主项目测试
 cargo test
+
+# 运行 Web 项目测试
+cargo test --manifest-path web/Cargo.toml
 ```
 
 ## 📝 Windows 用户注意事项

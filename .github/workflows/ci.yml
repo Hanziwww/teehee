@@ -27,13 +27,20 @@ jobs:
           ~/.cargo/registry/cache/
           ~/.cargo/git/db/
           target/
+          web/target/
         key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
         
-    - name: Build
+    - name: Build main project
       run: cargo build --verbose
       
-    - name: Run tests
+    - name: Build web project
+      run: cargo build --verbose --manifest-path web/Cargo.toml
+      
+    - name: Run main project tests
       run: cargo test --verbose
+      
+    - name: Run web project tests
+      run: cargo test --verbose --manifest-path web/Cargo.toml
 
   clippy:
     name: Clippy
@@ -48,8 +55,11 @@ jobs:
       with:
         components: clippy
         
-    - name: Run Clippy
-      run: cargo clippy -- -D warnings
+    - name: Run Clippy on main project
+      run: cargo clippy --all-targets --all-features -- -D warnings
+      
+    - name: Run Clippy on web project
+      run: cargo clippy --all-targets --all-features --manifest-path web/Cargo.toml -- -D warnings
 
   format:
     name: Format Check
@@ -64,6 +74,9 @@ jobs:
       with:
         components: rustfmt
         
-    - name: Check formatting
+    - name: Check main project formatting
       run: cargo fmt --all -- --check
+      
+    - name: Check web project formatting
+      run: cargo fmt --all --manifest-path web/Cargo.toml -- --check
 

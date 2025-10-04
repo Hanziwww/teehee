@@ -20,6 +20,9 @@ jobs:
       with:
         components: rustfmt
         
-    - name: Check formatting
+    - name: Check main project formatting
       run: cargo fmt --all -- --check
+      
+    - name: Check web project formatting
+      run: cargo fmt --all --manifest-path web/Cargo.toml -- --check
 

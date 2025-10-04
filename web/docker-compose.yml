@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  teehee-web:
+    build:
+      context: ..
+      dockerfile: web/Dockerfile
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/app/data
+      - ./workspaces:/app/workspaces
+      - ./downloads:/app/downloads
+    environment:
+      - DATABASE_URL=sqlite:/app/data/teehee.db
+      - RUST_LOG=teehee_web=info
+      - WORKSPACES_DIR=/app/workspaces
+      - DOWNLOADS_DIR=/app/downloads
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/stats"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+

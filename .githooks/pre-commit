@@ -13,37 +13,64 @@ echo "🔍 运行 pre-commit 检查..."
 echo ""
 
 # 1. 代码格式检查
-echo "📝 [1/3] 检查代码格式..."
+echo "📝 [1/5] 检查主项目代码格式..."
 if ! cargo fmt --all -- --check; then
     echo ""
-    echo "❌ 代码格式不符合规范！"
+    echo "❌ 主项目代码格式不符合规范！"
     echo "💡 运行以下命令自动格式化："
     echo "   cargo fmt --all"
     exit 1
 fi
-echo "✅ 格式检查通过"
+echo "✅ 主项目格式检查通过"
+echo ""
+
+echo "📝 [2/5] 检查 Web 项目代码格式..."
+if ! cargo fmt --all --manifest-path web/Cargo.toml -- --check; then
+    echo ""
+    echo "❌ Web 项目代码格式不符合规范！"
+    echo "💡 运行以下命令自动格式化："
+    echo "   cargo fmt --all --manifest-path web/Cargo.toml"
+    exit 1
+fi
+echo "✅ Web 项目格式检查通过"
 echo ""
 
 # 2. Clippy 代码检查
-echo "🔧 [2/3] 运行 Clippy 代码检查..."
+echo "🔧 [3/5] 运行主项目 Clippy 代码检查..."
 if ! cargo clippy --all-targets --all-features -- -D warnings; then
     echo ""
-    echo "❌ Clippy 检查失败！"
+    echo "❌ 主项目 Clippy 检查失败！"
     echo "💡 请修复上述警告后再提交"
     exit 1
 fi
-echo "✅ Clippy 检查通过"
+echo "✅ 主项目 Clippy 检查通过"
+echo ""
+
+echo "🔧 [4/5] 运行 Web 项目 Clippy 代码检查..."
+if ! cargo clippy --all-targets --all-features --manifest-path web/Cargo.toml -- -D warnings; then
+    echo ""
+    echo "❌ Web 项目 Clippy 检查失败！"
+    echo "💡 请修复上述警告后再提交"
+    exit 1
+fi
+echo "✅ Web 项目 Clippy 检查通过"
 echo ""
 
 # 3. 运行测试
-echo "🧪 [3/3] 运行测试..."
+echo "🧪 [5/5] 运行所有测试..."
 if ! cargo test --quiet; then
     echo ""
-    echo "❌ 测试失败！"
+    echo "❌ 主项目测试失败！"
     echo "💡 请修复测试后再提交"
     exit 1
 fi
-echo "✅ 测试通过"
+if ! cargo test --quiet --manifest-path web/Cargo.toml; then
+    echo ""
+    echo "❌ Web 项目测试失败！"
+    echo "💡 请修复测试后再提交"
+    exit 1
+fi
+echo "✅ 所有测试通过"
 echo ""
 
 echo "🎉 所有检查通过！准备提交..."

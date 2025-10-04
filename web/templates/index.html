@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container">
+    <h1 data-i18n="title">🔐 Teehee~ Steganography</h1>
+    <p class="subtitle" data-i18n="subtitle">Secure image steganography service</p>
+
+    <div class="tabs">
+        <button class="tab active" data-tab="encrypt" data-i18n="tab_encrypt">Encrypt</button>
+        <button class="tab" data-tab="decrypt" data-i18n="tab_decrypt">Decrypt</button>
+        <button class="tab" data-tab="stats" data-i18n="tab_stats">Stats</button>
+    </div>
+
+    <div id="encrypt-tab" class="tab-content active">
+        <div class="info-box">
+            <p data-i18n="encrypt_info1">Each run builds an isolated encryptor</p>
+            <p data-i18n="encrypt_info2">Compilation takes about 30–60 seconds</p>
+            <p data-i18n="encrypt_info3">Every build has its own secret, ensuring security</p>
+        </div>
+
+        <div class="form-group">
+            <label data-i18n="ttl_label">TTL (seconds)</label>
+            <input type="number" id="ttl" value="3600" min="60" max="86400">
+        </div>
+
+        <div class="form-group">
+            <label data-i18n="carrier_label">Carrier image</label>
+            <div class="file-input-wrapper">
+                <input type="file" id="carrier-image" accept="image/*">
+                <label for="carrier-image" class="file-input-label" data-i18n="choose_image">📁 Choose image</label>
+            </div>
+            <div id="carrier-name" class="file-name"></div>
+        </div>
+
+        <div class="form-group">
+            <label data-i18n="secret_message_label">Secret message</label>
+            <textarea id="message" data-i18n-placeholder="secret_message_placeholder" placeholder="Type the message to hide..."></textarea>
+        </div>
+
+        <div class="form-group">
+            <label data-i18n="user_key_label">User key (optional)</label>
+            <input type="text" id="user-key" data-i18n-placeholder="user_key_placeholder" placeholder="Optional extra secret key">
+        </div>
+
+        <button id="encrypt-btn" data-i18n="encrypt_cta">🚀 Start encryption</button>
+
+        <div id="encrypt-result"></div>
+    </div>
+
+    <div id="decrypt-tab" class="tab-content">
+        <div class="info-box">
+            <p data-i18n="decrypt_info1">We will match the right decryptor by image fingerprint</p>
+            <p data-i18n="decrypt_info2">Works even for compressed images</p>
+        </div>
+
+        <div class="form-group">
+            <label data-i18n="stego_label">Stego image</label>
+            <div class="file-input-wrapper">
+                <input type="file" id="stego-image" accept="image/*">
+                <label for="stego-image" class="file-input-label" data-i18n="choose_stego_image">📁 Choose stego image</label>
+            </div>
+            <div id="stego-name" class="file-name"></div>
+        </div>
+
+        <div class="form-group">
+            <label data-i18n="decrypt_user_key_label">User key (if used in encryption)</label>
+            <input type="text" id="decrypt-user-key" data-i18n-placeholder="decrypt_user_key_placeholder" placeholder="Same key used for encryption">
+        </div>
+
+        <button id="decrypt-btn" data-i18n="decrypt_cta">🔓 Start decryption</button>
+
+        <div id="decrypt-result"></div>
+    </div>
+
+    <div id="stats-tab" class="tab-content">
+        <button id="refresh-stats" data-i18n="stats_refresh">📊 Refresh stats</button>
+        <div id="stats-result"></div>
+    </div>
+</div>
+
+<template id="result-success-encrypt">
+    <div class="result">
+        <h3 data-i18n="result_encrypt_title">✅ Encryption succeeded!</h3>
+        <div class="result-item"><strong data-i18n="session_id">Session ID:</strong> <span data-field="session_id"></span></div>
+        <div class="result-item"><strong data-i18n="compile_id">Compile ID:</strong> <span data-field="compile_id"></span></div>
+        <div class="result-item"><strong data-i18n="message_size">Message size:</strong> <span data-field="message_size"></span> <span data-i18n="bytes">bytes</span></div>
+        <div class="result-item"><strong data-i18n="expires_at">Expires at:</strong> <span data-field="expires_at"></span></div>
+        <div class="result-item"><strong data-i18n="remaining_time">Remaining:</strong> <span data-field="remaining_minutes"></span> <span data-i18n="minutes">minutes</span></div>
+        <a class="download-link" data-field="download_href" download data-i18n="download_stego">📥 Download stego image</a>
+    </div>
+</template>
+
+<template id="result-success-decrypt">
+    <div class="result">
+        <h3 data-i18n="result_decrypt_title">✅ Decryption succeeded!</h3>
+        <div class="result-item"><strong data-i18n="compile_id">Compile ID:</strong> <span data-field="compile_id"></span></div>
+        <div class="result-item"><strong data-i18n="matched_distance">Matched distance</strong>: <span data-field="matched_distance"></span> (<span data-i18n="hamming_distance">Hamming distance</span>)</div>
+        <div class="result-item"><strong data-i18n="data_type">Data type:</strong> <span data-field="is_binary"></span></div>
+        <div class="result-item"><strong data-i18n="decrypted_message">Decrypted message:</strong></div>
+        <textarea readonly style="width: 100%; min-height: 150px; margin-top: 10px;" data-field="message"></textarea>
+    </div>
+</template>
+
+{% endblock %}
+

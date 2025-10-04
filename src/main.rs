@@ -289,7 +289,9 @@ fn main() -> anyhow::Result<()> {
             println!();
 
             // Create steganography engine
-            let stego_engine = if let Some(user_key) = key {
+            // Allow passing user key via environment variable to avoid argv exposure
+            let effective_key = key.or_else(|| std::env::var("TEEHEE_USER_KEY").ok());
+            let stego_engine = if let Some(user_key) = effective_key {
                 println!("🔐 Encryption: Enabled (with user key)");
                 TeeheeStego::with_user_key(&user_key)
             } else {
@@ -377,7 +379,8 @@ fn main() -> anyhow::Result<()> {
             println!();
 
             // Create steganography engine
-            let stego_engine = if let Some(user_key) = key {
+            let effective_key = key.or_else(|| std::env::var("TEEHEE_USER_KEY").ok());
+            let stego_engine = if let Some(user_key) = effective_key {
                 println!("🔓 Decryption: Using user key");
                 TeeheeStego::with_user_key(&user_key)
             } else {

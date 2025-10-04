@@ -30,3 +30,7 @@ output_*
 
 # OS
 Thumbs.db
+/web/target
+/web/data
+/web/workspaces
+/web/downloads

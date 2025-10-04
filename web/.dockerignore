@@ -1,0 +1,9 @@
+target/
+workspaces/
+downloads/
+*.db
+*.log
+.git/
+.gitignore
+README.md
+

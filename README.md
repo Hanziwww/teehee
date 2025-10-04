@@ -10,6 +10,22 @@
 
 > This project serves as a practical exploration of Rust's cryptographic ecosystem and systems programming capabilities.
 
+## 📑 Table of Contents
+
+- [Features](#-features)
+- [Quick Start](#-quick-start)
+- [Usage](#-usage)
+  - [1. Embed a Message](#1-embed-a-message)
+  - [2. Extract a Message](#2-extract-a-message)
+  - [3. Check Image Capacity](#3-check-image-capacity)
+- [Using as a Library](#-using-as-a-library)
+- [Teehee~ Web](#teehee-web)
+- [Features](#features)
+- [Running the Web Application](#running-the-web-application)
+- [Using the Web Interface](#using-the-web-interface)
+- [API Endpoints](#api-endpoints)
+- [Disclaimer](#-disclaimer)
+
 ## ✨ Features
 
 - 🔐 **Build-Time Salt Encryption**: Each compiled binary embeds a unique cryptographic salt generated at build time, making every binary cryptographically distinct
@@ -33,40 +49,31 @@ The executable will be located at `target/release/teehee` (or `teehee.exe` on Wi
 
 ### 1. Embed a Message
 
-**Embed text message:**
+
 ```bash
+# Embed text message:
 teehee embed -i cover.png -o stego.png -m "This is a secret message"
-```
 
-**Embed from file:**
-```bash
+# Embed from file:
 teehee embed -i cover.png -o stego.png -f secret.txt
-```
 
-**With custom password:**
-```bash
+# With custom password:
 teehee embed -i cover.png -o stego.png -m "Secret" -k "my-password"
-```
 
-**With quality metrics:**
-```bash
+# With quality metrics:
 teehee embed -i cover.png -o stego.png -m "Secret" -q
 ```
 
 ### 2. Extract a Message
 
-**Extract and display:**
 ```bash
+# Extract and display:
 teehee extract -s stego.png
-```
 
-**Extract to file:**
-```bash
+# Extract to file:
 teehee extract -s stego.png -O output.txt
-```
 
-**With custom password:**
-```bash
+# With custom password:
 teehee extract -s stego.png -k "my-password"
 ```
 
@@ -103,6 +110,80 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 ```
+
+# Teehee~ Web 
+
+Teehee includes a web-based interface for steganography operations. The web application provides a user-friendly GUI for embedding and extracting hidden messages without using the command line.
+
+## Features
+
+- 🖼️ **Visual Interface**: Drag-and-drop image upload and interactive controls
+- 🔑 **Session Management**: Secure, time-limited encryption sessions with automatic cleanup
+- 🎯 **Smart Image Matching**: Automatically finds the best matching image for extraction when you can't remember which one was used
+- 📊 **Real-time Stats**: Monitor capacity, quality metrics, and processing status
+- 🔒 **Security**: CSRF protection, CSP headers, and secure session handling
+- 🐳 **Docker Support**: Easy deployment with Docker and Docker Compose
+
+## Running the Web Application
+
+### Option 1: Using Cargo (Development)
+
+```bash
+cd web
+cargo run --release
+```
+
+The server will start at `http://localhost:8080`
+
+### Option 2: Using Docker Compose (Production)
+
+```bash
+cd web
+docker-compose up -d
+```
+
+This will:
+- Build and run the web application in a container
+- Expose the service on port 8080
+- Persist data in `./data`, `./workspaces`, and `./downloads` directories
+- Automatically restart on failure
+
+### Environment Variables
+
+- `DATABASE_URL`: SQLite database path (default: `sqlite:data/teehee.db`)
+- `RUST_LOG`: Logging level (default: `teehee_web=debug`)
+- `WORKSPACES_DIR`: Directory for temporary workspaces (default: `./workspaces`)
+- `DOWNLOADS_DIR`: Directory for generated files (default: `./downloads`)
+- `ALLOWED_ORIGINS`: Comma-separated list of allowed CORS origins (optional)
+
+## Using the Web Interface
+
+1. **Embedding Messages**:
+   - Navigate to `http://localhost:8080`
+   - Upload a cover image
+   - Enter your secret message or upload a file
+   - (Optional) Set a custom password and TTL
+   - Click "Encrypt & Embed" to generate the stego image
+   - Download the result
+
+2. **Extracting Messages**:
+   - Upload the stego image (with embedded data)
+   - Enter the password if one was used
+   - Click "Decrypt & Extract" to reveal the hidden message
+   
+3. **Smart Extraction** (when you forget which image was used):
+   - Upload multiple candidate images
+   - The system will use perceptual hashing to find the best match
+   - Automatically extract from the correct image
+
+## API Endpoints
+
+- `POST /api/encrypt/init` - Initialize encryption session
+- `POST /api/encrypt/embed` - Embed message into image
+- `POST /api/decrypt` - Extract message from stego image
+- `GET /api/session/:id` - Get session status
+- `GET /api/stats` - Get system statistics
+- `GET /downloads/:file` - Download generated files
 
 ## ⚠️ Disclaimer
 

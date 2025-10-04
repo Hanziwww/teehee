@@ -1,0 +1,57 @@
+[package]
+name = "teehee-web"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Web 框架
+axum = { version = "0.7", features = ["multipart"] }
+tokio = { version = "1", features = ["full"] }
+# enable timeout feature for TimeoutLayer
+tower = { version = "0.4", features = ["util", "limit", "timeout"] }
+tower-http = { version = "0.5", features = ["fs", "trace", "cors", "set-header", "compression-full"] }
+axum-extra = { version = "0.9", features = ["cookie"] }
+askama = "0.12"
+askama_axum = "0.4"
+
+# 数据库
+sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "sqlite"] }
+
+# 图像处理
+image = "0.23"  # img_hash 3.2 需要 image 0.23
+img_hash = "3.2"
+
+# 序列化
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# 日志
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# 工具
+anyhow = "1.0"
+thiserror = "1.0"
+uuid = { version = "1.6", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+rand = "0.8"
+sha2 = "0.10"
+base64 = "0.22"
+
+# 速率限制
+governor = "0.6"
+nonzero_ext = "0.3"
+
+# 静态文件嵌入
+rust-embed = "8.0"
+mime_guess = "2.0"
+
+# 异步文件操作
+tokio-util = { version = "0.7", features = ["io"] }
+
+# Teehee 核心库
+teehee = { path = ".." }
+
+[build-dependencies]
+anyhow = "1.0"
+

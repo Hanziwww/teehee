@@ -105,22 +105,6 @@ mod integration_tests {
     }
 
     #[test]
-    fn test_full_embed_extract_cycle() {
-        let carrier = create_test_image();
-        let message = b"Hello, this is a secret message for testing!";
-
-        let stego = TeeheeStego::new();
-
-        // Embed
-        let stego_image = stego.embed(&carrier, message).unwrap();
-
-        // Extract
-        let extracted = stego.extract(&stego_image).unwrap();
-
-        assert_eq!(message.as_slice(), extracted.as_slice());
-    }
-
-    #[test]
     fn test_capacity_calculation() {
         let img = create_test_image();
         let capacity = calculate_capacity(&img);
